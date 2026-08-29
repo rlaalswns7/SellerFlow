@@ -287,7 +287,14 @@ function SalesChart({ data }) {
               r="4"
               className="revenuePoint"
             />
-
+<text
+  x={x(i)}
+  y={revenueY(d.revenue) - 14}
+  textAnchor="middle"
+  className="revenueLabel"
+>
+  ₩{d.revenue.toLocaleString()}
+</text>
             {(data.length <= 7 ||
               i % (data.length === 15 ? 2 : 5) === 0 ||
               i === data.length - 1) && (
