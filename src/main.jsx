@@ -609,25 +609,54 @@ function EmptyPage({ title }) {
   );
 }
 function SupplierPage() {
-  const suppliers = [
-    {
-      id: 1,
-      name: "A농장",
-      contact: "010-1234-5678",
-      method: "카카오톡",
-      products: "사과 5kg",
-      status: "사용중",
-    },
-    {
-      id: 2,
-      name: "C농장",
-      contact: "010-5678-1234",
-      method: "카카오톡",
-      products: "복숭아 3kg",
-      status: "사용중",
-    },
-  ];
+  const [suppliers, setSuppliers] = useState([
+  {
+    id: 1,
+    name: "A농장",
+    contact: "010-1234-5678",
+    method: "카카오톡",
+    products: "사과 5kg",
+    status: "사용중",
+  },
+  {
+    id: 2,
+    name: "C농장",
+    contact: "010-5678-1234",
+    method: "카카오톡",
+    products: "복숭아 3kg",
+    status: "사용중",
+  },
+]);
 
+const [showForm, setShowForm] = useState(false);
+
+const [newSupplier, setNewSupplier] = useState({
+  name: "",
+  contact: "",
+  method: "카카오톡",
+  products: "",
+});
+const addSupplier = () => {
+  if (!newSupplier.name.trim()) return;
+
+  setSuppliers([
+    ...suppliers,
+    {
+      id: Date.now(),
+      ...newSupplier,
+      status: "사용중",
+    },
+  ]);
+
+  setNewSupplier({
+    name: "",
+    contact: "",
+    method: "카카오톡",
+    products: "",
+  });
+
+  setShowForm(false);
+};
   return (
     <>
       <div className="head">
@@ -636,11 +665,86 @@ function SupplierPage() {
           <p>발주에 사용할 도매처를 등록하고 관리합니다.</p>
         </div>
 
-        <button className="primary">
-          + 도매처 추가
-        </button>
+        <button
+  className="primary"
+  onClick={() => setShowForm(true)}
+>
+  + 도매처 추가
+</button>
       </div>
+{showForm && (
+  <div className="panel">
+    <h2>도매처 추가</h2>
 
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        gap: "12px",
+        marginTop: "16px",
+      }}
+    >
+      <input
+        placeholder="도매처명"
+        value={newSupplier.name}
+        onChange={(e) =>
+          setNewSupplier({ ...newSupplier, name: e.target.value })
+        }
+      />
+
+      <input
+        placeholder="연락처"
+        value={newSupplier.contact}
+        onChange={(e) =>
+          setNewSupplier({ ...newSupplier, contact: e.target.value })
+        }
+      />
+
+      <select
+        value={newSupplier.method}
+        onChange={(e) =>
+          setNewSupplier({ ...newSupplier, method: e.target.value })
+        }
+      >
+        <option value="카카오톡">카카오톡</option>
+        <option value="문자">문자</option>
+        <option value="이메일">이메일</option>
+        <option value="기타">기타</option>
+      </select>
+
+      <input
+        placeholder="연결 상품"
+        value={newSupplier.products}
+        onChange={(e) =>
+          setNewSupplier({ ...newSupplier, products: e.target.value })
+        }
+      />
+    </div>
+
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "flex-end",
+        gap: "8px",
+        marginTop: "16px",
+      }}
+    >
+      <button
+        className="secondary"
+        onClick={() => setShowForm(false)}
+      >
+        취소
+      </button>
+
+      <button
+        className="primary"
+        onClick={addSupplier}
+      >
+        등록
+      </button>
+    </div>
+  </div>
+)}
       <div className="panel">
         <div className="table">
           <table>
