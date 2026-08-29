@@ -1,0 +1,452 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  font-family: Inter, Pretendard, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  color: #172033;
+  background: #f5f7fb;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #f5f7fb;
+}
+
+button {
+  font: inherit;
+}
+
+.app {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* 사이드바 */
+
+aside {
+  width: 235px;
+  background: #101522;
+  color: white;
+  padding: 24px 16px;
+  position: fixed;
+  inset: 0 auto 0 0;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 8px 24px;
+}
+
+.logo i {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #7657ff, #4f7cff);
+  font-style: normal;
+  font-weight: 900;
+}
+
+.logo b {
+  font-size: 20px;
+}
+
+.logo span {
+  color: #8e79ff;
+}
+
+.workspace {
+  padding: 14px;
+  margin-bottom: 18px;
+  border-radius: 14px;
+  background: rgba(255,255,255,.06);
+}
+
+.workspace b,
+.workspace small {
+  display: block;
+}
+
+.workspace small {
+  margin-top: 6px;
+  color: #8f9bad;
+  font-size: 11px;
+}
+
+aside button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #9ca6b8;
+  padding: 12px 13px;
+  border-radius: 11px;
+  text-align: left;
+  margin: 3px 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+aside button em {
+  width: 22px;
+  text-align: center;
+  font-style: normal;
+}
+
+aside button:hover,
+aside button.active {
+  color: white;
+  background: linear-gradient(
+    90deg,
+    rgba(111,83,255,.22),
+    rgba(111,83,255,.08)
+  );
+}
+
+aside button.active {
+  box-shadow: inset 3px 0 #7557ff;
+}
+
+/* 메인 */
+
+main {
+  margin-left: 235px;
+  width: calc(100% - 235px);
+}
+
+header {
+  height: 68px;
+  display: flex;
+  align-items: center;
+  padding: 0 34px;
+  background: rgba(255,255,255,.88);
+  border-bottom: 1px solid #e8ebf2;
+  color: #8992a3;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  backdrop-filter: blur(12px);
+}
+
+header b {
+  color: #20283a;
+  margin-left: 5px;
+}
+
+.content {
+  padding: 34px;
+  max-width: 1500px;
+  margin: auto;
+}
+
+.head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.head h1 {
+  margin: 0;
+  font-size: 29px;
+  letter-spacing: -1px;
+}
+
+.head p {
+  margin: 8px 0 0;
+  color: #8a94a6;
+  font-size: 14px;
+}
+
+/* KPI */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.card {
+  background: white;
+  border: 1px solid #e9ecf3;
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 7px 25px rgba(24,35,55,.04);
+}
+
+.cardTop {
+  display: flex;
+  justify-content: space-between;
+  color: #98a1b2;
+  font-size: 12px;
+}
+
+.cardTop i {
+  font-style: normal;
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  background: #f5f3ff;
+  color: #6e54ff;
+  border-radius: 8px;
+}
+
+.card strong {
+  display: block;
+  font-size: 34px;
+  margin: 18px 0 4px;
+}
+
+.card strong small {
+  font-size: 14px;
+  margin-left: 3px;
+  color: #8c95a6;
+}
+
+.card b {
+  display: block;
+  font-size: 14px;
+}
+
+.card p {
+  margin: 7px 0 0;
+  color: #949dad;
+  font-size: 12px;
+}
+
+/* 패널 */
+
+.panel {
+  background: white;
+  border: 1px solid #e8ebf2;
+  border-radius: 18px;
+  padding: 22px;
+  margin-bottom: 20px;
+  box-shadow: 0 7px 25px rgba(24,35,55,.035);
+}
+
+.panelHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.panelHead p {
+  margin: 5px 0 0;
+  color: #9aa3b3;
+  font-size: 12px;
+}
+
+/* 기간 버튼 */
+
+.tabs {
+  padding: 4px;
+  border-radius: 11px;
+  background: #f2f4f8;
+}
+
+.tabs button {
+  border: 0;
+  background: transparent;
+  padding: 8px 14px;
+  border-radius: 8px;
+  color: #8b94a4;
+  cursor: pointer;
+}
+
+.tabs button.on {
+  background: white;
+  color: #5d46e8;
+  font-weight: 700;
+  box-shadow: 0 2px 7px rgba(20,30,50,.08);
+}
+
+/* 그래프 */
+
+.chartWrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.chartWrap svg {
+  width: 100%;
+  min-width: 650px;
+  height: 280px;
+}
+
+.grid {
+  stroke: #edf0f5;
+  stroke-width: 1;
+}
+
+.orderLine,
+.revenueLine {
+  fill: none;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.orderLine {
+  stroke: #7257ff;
+}
+
+.revenueLine {
+  stroke: #18b884;
+}
+
+.orderPoint {
+  fill: #7257ff;
+}
+
+.revenuePoint {
+  fill: #18b884;
+}
+
+.chartWrap text {
+  font-size: 11px;
+  fill: #9aa2b1;
+}
+
+.legend {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #7d8798;
+}
+
+.legend span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 12px;
+}
+
+.purpleDot {
+  background: #7257ff;
+}
+
+.greenDot {
+  background: #18b884;
+}
+
+/* 주문 표 */
+
+.table {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 750px;
+}
+
+th {
+  text-align: left;
+  color: #919aaa;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 12px;
+  border-bottom: 1px solid #edf0f4;
+}
+
+td {
+  padding: 15px 12px;
+  font-size: 13px;
+  border-bottom: 1px solid #f0f2f6;
+}
+
+tbody tr:hover {
+  background: #fafbff;
+}
+
+.tag {
+  display: inline-flex;
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: #f2efff;
+  color: #654be6;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.empty {
+  min-height: 250px;
+  display: grid;
+  place-content: center;
+  text-align: center;
+}
+
+.empty p {
+  color: #929cad;
+}
+
+/* 아이패드 */
+
+@media (max-width: 950px) {
+  aside {
+    width: 190px;
+  }
+
+  main {
+    margin-left: 190px;
+    width: calc(100% - 190px);
+  }
+
+  .cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .content {
+    padding: 24px;
+  }
+}
+
+/* 모바일 */
+
+@media (max-width: 650px) {
+  aside {
+    position: relative;
+    width: 100%;
+    min-height: auto;
+  }
+
+  .app {
+    display: block;
+  }
+
+  main {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .cards {
+    grid-template-columns: 1fr;
+  }
+
+  .content {
+    padding: 18px;
+  }
+
+  header {
+    padding: 0 18px;
+  }
+}
