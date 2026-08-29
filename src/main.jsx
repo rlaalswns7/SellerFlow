@@ -476,12 +476,16 @@ function OrderPage() {
             <thead>
               <tr>
                 <th>선택</th>
-                <th>주문번호</th>
-                <th>날짜</th>
-                <th>고객</th>
-                <th>상품</th>
-                <th>도매처</th>
-                <th>발주 상태</th>
+<th>주문번호</th>
+<th>날짜</th>
+<th>고객</th>
+<th>상품</th>
+<th>옵션</th>
+<th>수량</th>
+<th>판매금액</th>
+<th>도매처</th>
+<th>발주상태</th>
+<th>운송장상태</th>
               </tr>
             </thead>
 
@@ -506,20 +510,22 @@ function OrderPage() {
                     </td>
 
                     <td>{o.date}</td>
-
-                    <td>{o.customer}</td>
-
-                    <td>{o.product}</td>
-
-                    <td>{o.supplier}</td>
-
-                    <td>
-                      <span className="tag">
-                        {canOrder
-                          ? "발주 가능"
-                          : "도매처 연결 필요"}
-                      </span>
-                    </td>
+<td>{o.customer}</td>
+<td>{o.product}</td>
+<td>{o.option}</td>
+<td>{o.qty}</td>
+<td>₩{o.saleAmount.toLocaleString()}</td>
+<td>{o.supplier}</td>
+<td>
+  <span className="tag">
+    {canOrder ? "발주 가능" : "도매처 연결 필요"}
+  </span>
+</td>
+<td>
+  <span className="tag">
+    {o.invoiceStatus}
+  </span>
+</td>
                   </tr>
                 );
               })}
