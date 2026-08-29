@@ -109,12 +109,14 @@ function App() {
 
         <section className="content">
           {page === "대시보드" ? (
-            <Dashboard />
-          ) : page === "주문내역" ? (
-            <OrderPage />
-          ) : (
-            <EmptyPage title={page} />
-          )}
+  <Dashboard />
+) : page === "주문내역" ? (
+  <OrderPage />
+) : page === "도매처 관리" ? (
+  <SupplierPage />
+) : (
+  <EmptyPage title={page} />
+)}
         </section>
       </main>
     </div>
@@ -606,5 +608,73 @@ function EmptyPage({ title }) {
     </>
   );
 }
+function SupplierPage() {
+  const suppliers = [
+    {
+      id: 1,
+      name: "A농장",
+      contact: "010-1234-5678",
+      method: "카카오톡",
+      products: "사과 5kg",
+      status: "사용중",
+    },
+    {
+      id: 2,
+      name: "C농장",
+      contact: "010-5678-1234",
+      method: "카카오톡",
+      products: "복숭아 3kg",
+      status: "사용중",
+    },
+  ];
 
+  return (
+    <>
+      <div className="head">
+        <div>
+          <h1>도매처 관리</h1>
+          <p>발주에 사용할 도매처를 등록하고 관리합니다.</p>
+        </div>
+
+        <button className="primary">
+          + 도매처 추가
+        </button>
+      </div>
+
+      <div className="panel">
+        <div className="table">
+          <table>
+            <thead>
+              <tr>
+                <th>도매처</th>
+                <th>연락처</th>
+                <th>발주 방식</th>
+                <th>연결 상품</th>
+                <th>상태</th>
+                <th>관리</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {suppliers.map((supplier) => (
+                <tr key={supplier.id}>
+                  <td><strong>{supplier.name}</strong></td>
+                  <td>{supplier.contact}</td>
+                  <td>{supplier.method}</td>
+                  <td>{supplier.products}</td>
+                  <td>
+                    <span className="tag">{supplier.status}</span>
+                  </td>
+                  <td>
+                    <button className="secondary">수정</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
 createRoot(document.getElementById("root")).render(<App />);
