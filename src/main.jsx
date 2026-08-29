@@ -314,19 +314,204 @@ function SalesChart({ data }) {
 }
 
 function OrderPage() {
+  const [selected, setSelected] = useState([]);
+
+  const toggleOrder = (id) => {
+    setSelected((prev) =>
+      prev.includes(id)
+        ? prev.filter((x) => x !== id)
+        : [...prev, id]
+    );
+  };
+
+  const selectableOrders = orders.filter(
+    (o) => o.supplier !== "미연결"
+  );
+
+  const toggleAll = () => {
+    if (selected.length === selectableOrders.length) {
+      setSelected([]);
+    } else {
+      setSelected(selectableOrders.map((o) => o.id));
+    }
+  };
+
+  const createPurchaseOrder = () => {
+    const targetOrders = orders.filter((o) =>
+      selected.includes(o.id)
+    );
+
+    if (targetOrders.length === 0) {
+      alert("발주할 주문을 선택해주세요.");
+      return;
+    }
+
+    const grouped = targetOrders.reduce((acc, order) => {
+      if (!acc[order.supplier]) {
+        acc[order.supplier] = [];
+      }
+
+      acc[order.supplier].push(order);
+      return acc;
+    }, {});
+
+    const rows = [
+      [
+        "도매처",
+        "주문번호",
+        "주문일",
+        "고객명",
+        "상품명",
+      ],
+    ];
+
+    Object.entries(grouped).forEach(([supplier, items]) => {
+      items.forEach((order) => {
+        rows.push([
+          supplier,
+          order.id,
+          order.date,
+          order.customer,
+          order.product,
+        ]);
+      });
+    });
+
+    const csv =
+      "\uFEFF" +
+      rows
+        .map((row) =>
+          row
+            .map((value) => `"${String(value).replaceAll('"', '""')}"`)
+            .join(",")
+        )
+        .join("\n");
+
+    const blob = new Blob([csv], {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "SellerFlow_발주서.csv";
+    link.click();
+
+    URL.revokeObjectURL(url);
+
+    alert(
+      `${targetOrders.length}건을 ${Object.keys(grouped).length}개 도매처로 분류했습니다.`
+    );
+  };
+
   return (
     <>
       <div className="head">
         <div>
           <h1>주문내역</h1>
           <p>
-            주문과 도매처 연결 및 운송장 상태를 확인합니다.
+            주문을 선택하면 도매처별로 자동 분류해
+            발주서를 생성합니다.
           </p>
         </div>
+
+        <button
+          onClick={createPurchaseOrder}
+          style={{
+            border: 0,
+            background: "#7257ff",
+            color: "white",
+            padding: "11px 16px",
+            borderRadius: "10px",
+            fontWeight: "700",
+          }}
+        >
+          발주서 생성 ({selected.length})
+        </button>
       </div>
 
       <div className="panel">
-        <OrderTable rows={orders} />
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            marginBottom: "16px",
+            fontSize: "13px",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={
+              selectableOrders.length > 0 &&
+              selected.length === selectableOrders.length
+            }
+            onChange={toggleAll}
+          />
+
+          전체 선택
+
+          <span style={{ color: "#929cad" }}>
+            · 도매처가 연결된 주문만 발주 가능
+          </span>
+        </div>
+
+        <div className="table">
+          <table>
+            <thead>
+              <tr>
+                <th>선택</th>
+                <th>주문번호</th>
+                <th>날짜</th>
+                <th>고객</th>
+                <th>상품</th>
+                <th>도매처</th>
+                <th>발주 상태</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {orders.map((o) => {
+                const canOrder =
+                  o.supplier !== "미연결";
+
+                return (
+                  <tr key={o.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        disabled={!canOrder}
+                        checked={selected.includes(o.id)}
+                        onChange={() => toggleOrder(o.id)}
+                      />
+                    </td>
+
+                    <td>
+                      <b>{o.id}</b>
+                    </td>
+
+                    <td>{o.date}</td>
+
+                    <td>{o.customer}</td>
+
+                    <td>{o.product}</td>
+
+                    <td>{o.supplier}</td>
+
+                    <td>
+                      <span className="tag">
+                        {canOrder
+                          ? "발주 가능"
+                          : "도매처 연결 필요"}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </>
   );
