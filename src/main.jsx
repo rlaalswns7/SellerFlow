@@ -19,6 +19,11 @@ const orders = [
     date: "08/29",
     customer: "홍길동",
     product: "사과 5kg",
+   option: "5kg / 특품",
+qty: 1,
+saleAmount: 32900,
+purchaseStatus: "발주대기",
+invoiceStatus: "송장대기",
     supplier: "A농장",
     link: "연결완료",
     invoice: "대기",
@@ -28,6 +33,11 @@ const orders = [
     date: "08/29",
     customer: "김민준",
     product: "토마토 2kg",
+    option: "2kg",
+qty: 1,
+saleAmount: 21900,
+purchaseStatus: "도매처 연결 필요",
+invoiceStatus: "송장대기",
     supplier: "미연결",
     link: "연결필요",
     invoice: "대기",
@@ -37,7 +47,11 @@ const orders = [
     date: "08/28",
     customer: "이서준",
     product: "복숭아 3kg",
-    supplier: "C농장",
+  option: "3kg / 특",
+qty: 1,
+saleAmount: 27900,
+purchaseStatus: "발주완료",
+invoiceStatus: "쿠팡 등록 가능",  supplier: "C농장",
     link: "연결완료",
     invoice: "등록가능",
   },
@@ -524,12 +538,15 @@ function OrderTable({ rows }) {
         <thead>
           <tr>
             <th>주문번호</th>
-            <th>날짜</th>
-            <th>고객</th>
-            <th>상품</th>
-            <th>도매처</th>
-            <th>상품 연결</th>
-            <th>운송장</th>
+<th>날짜</th>
+<th>고객</th>
+<th>상품</th>
+<th>옵션</th>
+<th>수량</th>
+<th>판매금액</th>
+<th>도매처</th>
+<th>발주상태</th>
+<th>운송장상태</th>
           </tr>
         </thead>
 
@@ -537,22 +554,25 @@ function OrderTable({ rows }) {
           {rows.map((o) => (
             <tr key={o.id}>
               <td><b>{o.id}</b></td>
-              <td>{o.date}</td>
-              <td>{o.customer}</td>
-              <td>{o.product}</td>
-              <td>{o.supplier}</td>
+<td>{o.date}</td>
+<td>{o.customer}</td>
+<td>{o.product}</td>
+<td>{o.option}</td>
+<td>{o.qty}</td>
+<td>₩{o.saleAmount.toLocaleString()}</td>
+<td>{o.supplier}</td>
 
-              <td>
-                <span className="tag">
-                  {o.link}
-                </span>
-              </td>
+<td>
+  <span className="tag">
+    {o.purchaseStatus}
+  </span>
+</td>
 
-              <td>
-                <span className="tag">
-                  {o.invoice}
-                </span>
-              </td>
+<td>
+  <span className="tag">
+    {o.invoiceStatus}
+  </span>
+</td>
             </tr>
           ))}
         </tbody>
