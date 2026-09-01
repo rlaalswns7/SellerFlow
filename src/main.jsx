@@ -639,14 +639,29 @@ const [newSupplier, setNewSupplier] = useState({
 const addSupplier = () => {
   if (!newSupplier.name.trim()) return;
 
-  setSuppliers([
-    ...suppliers,
-    {
-      id: Date.now(),
-      ...newSupplier,
-      status: "사용중",
-    },
-  ]);
+  if (editingId !== null) {
+    setSuppliers(
+      suppliers.map((supplier) =>
+        supplier.id === editingId
+          ? {
+              ...supplier,
+              ...newSupplier,
+            }
+          : supplier
+      )
+    );
+
+    setEditingId(null);
+  } else {
+    setSuppliers([
+      ...suppliers,
+      {
+        id: Date.now(),
+        ...newSupplier,
+        status: "사용중",
+      },
+    ]);
+  }
 
   setNewSupplier({
     name: "",
@@ -657,8 +672,35 @@ const addSupplier = () => {
 
   setShowForm(false);
 };
-  return (
-    <>
+  const [editingId, setEditingId] = useState(null);
+
+const startEditSupplier = (supplier) => {
+  setEditingId(supplier.id);
+
+  setNewSupplier({
+    name: supplier.name,
+    contact: supplier.contact,
+    method: supplier.method,
+    products: supplier.products,
+  });
+
+  setShowForm(true);
+};
+
+const cancelSupplierForm = () => {
+  setEditingId(null);
+
+  setNewSupplier({
+    name: "",
+    contact: "",
+    method: "카카오톡",
+    products: "",
+  });
+
+  setShowForm(false);
+}; 
+   return (
+  <>
       <div className="head">
         <div>
           <h1>도매처 관리</h1>
@@ -667,14 +709,23 @@ const addSupplier = () => {
 
         <button
   className="primary"
-  onClick={() => setShowForm(true)}
+  onClick={() => {
+  setEditingId(null);
+  setNewSupplier({
+    name: "",
+    contact: "",
+    method: "카카오톡",
+    products: "",
+  });
+  setShowForm(true);
+}}
 >
   + 도매처 추가
 </button>
       </div>
 {showForm && (
   <div className="panel">
-    <h2>도매처 추가</h2>
+    <h2>{editingId !== null ? "도매처 수정" : "도매처 추가"}</h2>
 
     <div
       style={{
@@ -731,7 +782,7 @@ const addSupplier = () => {
     >
       <button
         className="secondary"
-        onClick={() => setShowForm(false)}
+        onClick={cancelSupplierForm}
       >
         취소
       </button>
@@ -740,7 +791,7 @@ const addSupplier = () => {
         className="primary"
         onClick={addSupplier}
       >
-        등록
+        {editingId !== null ? "저장" : "등록"}
       </button>
     </div>
   </div>
@@ -770,7 +821,12 @@ const addSupplier = () => {
                     <span className="tag">{supplier.status}</span>
                   </td>
                   <td>
-                    <button className="secondary">수정</button>
+                    <button
+  className="secondary"
+  onClick={() => startEditSupplier(supplier)}
+>
+  수정
+</button>
                   </td>
                 </tr>
               ))}
