@@ -114,9 +114,11 @@ function App() {
   <OrderPage />
 ) : page === "도매처 관리" ? (
   <SupplierPage />
+) : page === "상품 연결" ? (
+  <ProductLinkPage />
 ) : (
   <EmptyPage title={page} />
-)}
+)} 
         </section>
       </main>
     </div>
@@ -854,6 +856,109 @@ const cancelSupplierForm = () => {
     </td>
   </tr>
 ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+function ProductLinkPage() {
+  const [products, setProducts] = useState([
+    {
+      id: 1,
+      name: "사과 5kg",
+      option: "5kg / 특품",
+      price: 32900,
+      supplier: "A농장",
+    },
+    {
+      id: 2,
+      name: "토마토 2kg",
+      option: "2kg",
+      price: 21900,
+      supplier: "",
+    },
+    {
+      id: 3,
+      name: "복숭아 3kg",
+      option: "3kg",
+      price: 28900,
+      supplier: "C농장",
+    },
+  ]);
+
+  const supplierOptions = ["A농장", "C농장"];
+
+  const changeSupplier = (id, supplier) => {
+    setProducts(
+      products.map((product) =>
+        product.id === id
+          ? { ...product, supplier }
+          : product
+      )
+    );
+  };
+
+  return (
+    <>
+      <div className="head">
+        <div>
+          <h1>상품 연결</h1>
+          <p>판매 상품과 발주 도매처를 연결합니다.</p>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="table">
+          <table>
+            <thead>
+              <tr>
+                <th>상품</th>
+                <th>옵션</th>
+                <th>판매가</th>
+                <th>도매처</th>
+                <th>연결 상태</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {products.map((product) => (
+                <tr key={product.id}>
+                  <td>
+                    <strong>{product.name}</strong>
+                  </td>
+
+                  <td>{product.option}</td>
+
+                  <td>
+                    ₩{product.price.toLocaleString()}
+                  </td>
+
+                  <td>
+                    <select
+                      value={product.supplier}
+                      onChange={(e) =>
+                        changeSupplier(product.id, e.target.value)
+                      }
+                    >
+                      <option value="">도매처 선택</option>
+
+                      {supplierOptions.map((supplier) => (
+                        <option key={supplier} value={supplier}>
+                          {supplier}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+
+                  <td>
+                    <span className="tag">
+                      {product.supplier ? "연결완료" : "미연결"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
