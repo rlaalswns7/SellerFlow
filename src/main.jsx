@@ -629,7 +629,7 @@ function SupplierPage() {
 ]);
 
 const [showForm, setShowForm] = useState(false);
-
+const [editingId, setEditingId] = useState(null);
 const [newSupplier, setNewSupplier] = useState({
   name: "",
   contact: "",
@@ -672,7 +672,7 @@ const addSupplier = () => {
 
   setShowForm(false);
 };
-  const [editingId, setEditingId] = useState(null);
+  
 
 const startEditSupplier = (supplier) => {
   setEditingId(supplier.id);
@@ -685,6 +685,12 @@ const startEditSupplier = (supplier) => {
   });
 
   setShowForm(true);
+  setTimeout(() => {
+  window.scrollTo({
+    top: 0,
+    behavior: "smooth",
+  });
+}, 0);
 };
 
 const cancelSupplierForm = () => {
