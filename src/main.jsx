@@ -705,7 +705,15 @@ const cancelSupplierForm = () => {
 
   setShowForm(false);
 }; 
-   return (
+ const deleteSupplier = (id) => {
+  const ok = window.confirm("이 도매처를 삭제할까요?");
+  if (!ok) return;
+
+  setSuppliers(
+    suppliers.filter((supplier) => supplier.id !== id)
+  );
+};
+  return (
   <>
       <div className="head">
         <div>
@@ -818,24 +826,34 @@ const cancelSupplierForm = () => {
 
             <tbody>
               {suppliers.map((supplier) => (
-                <tr key={supplier.id}>
-                  <td><strong>{supplier.name}</strong></td>
-                  <td>{supplier.contact}</td>
-                  <td>{supplier.method}</td>
-                  <td>{supplier.products}</td>
-                  <td>
-                    <span className="tag">{supplier.status}</span>
-                  </td>
-                  <td>
-                    <button
-  className="secondary"
-  onClick={() => startEditSupplier(supplier)}
->
-  수정
-</button>
-                  </td>
-                </tr>
-              ))}
+  <tr key={supplier.id}>
+    <td>
+      <strong>{supplier.name}</strong>
+    </td>
+    <td>{supplier.contact}</td>
+    <td>{supplier.method}</td>
+    <td>{supplier.products}</td>
+    <td>
+      <span className="tag">{supplier.status}</span>
+    </td>
+    <td>
+      <button
+        className="secondary"
+        onClick={() => startEditSupplier(supplier)}
+      >
+        수정
+      </button>
+
+      <button
+        className="secondary"
+        onClick={() => deleteSupplier(supplier.id)}
+        style={{ marginLeft: "8px" }}
+      >
+        삭제
+      </button>
+    </td>
+  </tr>
+))}
             </tbody>
           </table>
         </div>
