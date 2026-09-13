@@ -528,7 +528,7 @@ const matchedOrders = orders.map((order) => {
             </thead>
 
             <tbody>
-              {matchedOrders.map((o) => (
+              {matchedOrders.map((o) => {
                 const canOrder =
                   o.supplier !== "미연결";
 
@@ -618,7 +618,8 @@ function OrderTable({ rows }) {
   </span>
 </td>
             </tr>
-          ))}
+         );
+})} 
         </tbody>
       </table>
     </div>
