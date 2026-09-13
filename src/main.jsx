@@ -565,7 +565,7 @@ const matchedOrders = orders.map((order) => {
   </span>
 </td>
                   </tr>
-                ))}
+                })}
           
             </tbody>
           </table>
