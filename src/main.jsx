@@ -358,7 +358,8 @@ function SalesChart({ data }) {
 
 function OrderPage({ products }) {
   const [selected, setSelected] = useState([]);
-const matchedOrders = orders.map((order) => {
+ const [orderList, setOrderList] = useState(orders);
+ const matchedOrders = orderList.map((order) => { 
   const linkedProduct = products.find(
     (product) => product.name === order.product
   );
@@ -451,7 +452,19 @@ const matchedOrders = orders.map((order) => {
     link.click();
 
     URL.revokeObjectURL(url);
+setOrderList((prev) =>
+  prev.map((order) =>
+    selected.includes(order.id)
+      ? {
+          ...order,
+          purchaseStatus: "발주완료",
+          invoiceStatus: "송장대기",
+        }
+      : order
+  )
+);
 
+setSelected([]);
     alert(
       `${targetOrders.length}건을 ${Object.keys(grouped).length}개 도매처로 분류했습니다.`
     );
@@ -556,7 +569,7 @@ const matchedOrders = orders.map((order) => {
 <td>{o.supplier}</td>
 <td>
   <span className="tag">
-    {canOrder ? "발주 가능" : "도매처 연결 필요"}
+    {o.supplier === "미연결" ? "도매처 연결 필요" : o.purchaseStatus}
   </span>
 </td>
 <td>
