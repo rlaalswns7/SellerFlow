@@ -76,7 +76,29 @@ const sales30 = [
 
 function App() {
   const [page, setPage] = useState("대시보드");
-
+const [products, setProducts] = useState([
+  {
+    id: 1,
+    name: "사과 5kg",
+    option: "5kg / 특품",
+    price: 32900,
+    supplier: "A농장",
+  },
+  {
+    id: 2,
+    name: "토마토 2kg",
+    option: "2kg",
+    price: 21900,
+    supplier: "",
+  },
+  {
+    id: 3,
+    name: "복숭아 3kg",
+    option: "3kg",
+    price: 28900,
+    supplier: "C농장",
+  },
+]);
   return (
     <div className="app">
       <aside>
@@ -111,11 +133,14 @@ function App() {
           {page === "대시보드" ? (
   <Dashboard />
 ) : page === "주문내역" ? (
-  <OrderPage />
+  <OrderPage products={products} />
 ) : page === "도매처 관리" ? (
   <SupplierPage />
 ) : page === "상품 연결" ? (
-  <ProductLinkPage />
+  <ProductLinkPage
+    products={products}
+    setProducts={setProducts}
+  />
 ) : (
   <EmptyPage title={page} />
 )} 
@@ -331,9 +356,18 @@ function SalesChart({ data }) {
   );
 }
 
-function OrderPage() {
+function OrderPage({ products }) {
   const [selected, setSelected] = useState([]);
+const matchedOrders = orders.map((order) => {
+  const linkedProduct = products.find(
+    (product) => product.name === order.product
+  );
 
+  return {
+    ...order,
+    supplier: linkedProduct?.supplier || "미연결",
+  };
+});
   const toggleOrder = (id) => {
     setSelected((prev) =>
       prev.includes(id)
@@ -342,7 +376,7 @@ function OrderPage() {
     );
   };
 
-  const selectableOrders = orders.filter(
+  const selectableOrders = matchedOrders.filter(
     (o) => o.supplier !== "미연결"
   );
 
@@ -355,7 +389,7 @@ function OrderPage() {
   };
 
   const createPurchaseOrder = () => {
-    const targetOrders = orders.filter((o) =>
+    const targetOrders = matchedOrders.filter((o) =>
       selected.includes(o.id)
     );
 
@@ -494,7 +528,7 @@ function OrderPage() {
             </thead>
 
             <tbody>
-              {orders.map((o) => {
+              {matchedOrders.map((o) => (
                 const canOrder =
                   o.supplier !== "미연결";
 
@@ -863,30 +897,8 @@ const cancelSupplierForm = () => {
     </>
   );
 }
-function ProductLinkPage() {
-  const [products, setProducts] = useState([
-    {
-      id: 1,
-      name: "사과 5kg",
-      option: "5kg / 특품",
-      price: 32900,
-      supplier: "A농장",
-    },
-    {
-      id: 2,
-      name: "토마토 2kg",
-      option: "2kg",
-      price: 21900,
-      supplier: "",
-    },
-    {
-      id: 3,
-      name: "복숭아 3kg",
-      option: "3kg",
-      price: 28900,
-      supplier: "C농장",
-    },
-  ]);
+function ProductLinkPage({ products, setProducts }) {
+ 
 
   const supplierOptions = ["A농장", "C농장"];
 
