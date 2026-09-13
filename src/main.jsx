@@ -619,8 +619,7 @@ function OrderTable({ rows }) {
   </span>
 </td>
             </tr>
-         );
-})} 
+         ))}
         </tbody>
       </table>
     </div>
