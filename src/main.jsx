@@ -137,13 +137,15 @@ const [products, setProducts] = useState([
 ) : page === "도매처 관리" ? (
   <SupplierPage />
 ) : page === "상품 연결" ? (
-  <ProductLinkPage
-    products={products}
-    setProducts={setProducts}
-  />
+   <ProductLinkPage
+  products={products}
+  setProducts={setProducts}
+/>
+) : page === "운송장 관리" ? (
+  <InvoicePage />
 ) : (
   <EmptyPage title={page} />
-)} 
+)}
         </section>
       </main>
     </div>
@@ -981,6 +983,139 @@ function ProductLinkPage({ products, setProducts }) {
                   <td>
                     <span className="tag">
                       {product.supplier ? "연결완료" : "미연결"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+function InvoicePage() {
+  const [invoiceRows, setInvoiceRows] = useState(
+    orders
+      .filter((order) => order.supplier !== "미연결")
+      .map((order) => ({
+        id: order.id,
+        product: order.product,
+        supplier: order.supplier,
+        carrier: "",
+        invoice: "",
+        status: "송장대기",
+      }))
+  );
+
+  const handleCsvUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      const text = String(reader.result || "").replace(/^\uFEFF/, "");
+
+      const lines = text
+        .split(/\r?\n/)
+        .filter((line) => line.trim());
+
+      if (lines.length < 2) {
+        alert("송장 CSV에 데이터가 없습니다.");
+        return;
+      }
+
+      const uploaded = lines
+        .slice(1)
+        .map((line) => {
+          const columns = line
+            .split(",")
+            .map((value) =>
+              value.trim().replace(/^"|"$/g, "")
+            );
+
+          return {
+            id: columns[0],
+            carrier: columns[1],
+            invoice: columns[2],
+          };
+        })
+        .filter((row) => row.id);
+
+      setInvoiceRows((prev) =>
+        prev.map((row) => {
+          const matched = uploaded.find(
+            (item) => item.id === row.id
+          );
+
+          if (!matched) return row;
+
+          return {
+            ...row,
+            carrier: matched.carrier || "",
+            invoice: matched.invoice || "",
+            status: matched.invoice ? "등록대기" : "송장대기",
+          };
+        })
+      );
+
+      alert(`${uploaded.length}건의 송장 데이터를 불러왔습니다.`);
+    };
+
+    reader.readAsText(file, "UTF-8");
+  };
+
+  return (
+    <>
+      <div className="head">
+        <div>
+          <h1>운송장 관리</h1>
+          <p>도매처에서 받은 송장 데이터를 주문번호와 자동 매칭합니다.</p>
+        </div>
+
+        <label className="primary">
+          송장 CSV 불러오기
+          <input
+            type="file"
+            accept=".csv"
+            onChange={handleCsvUpload}
+            style={{ display: "none" }}
+          />
+        </label>
+      </div>
+
+      <div className="panel">
+        <p style={{ marginBottom: "16px" }}>
+          CSV 형식: 주문번호, 택배사, 운송장번호
+        </p>
+
+        <div className="table">
+          <table>
+            <thead>
+              <tr>
+                <th>주문번호</th>
+                <th>상품</th>
+                <th>도매처</th>
+                <th>택배사</th>
+                <th>운송장번호</th>
+                <th>상태</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {invoiceRows.map((row) => (
+                <tr key={row.id}>
+                  <td>
+                    <strong>{row.id}</strong>
+                  </td>
+                  <td>{row.product}</td>
+                  <td>{row.supplier}</td>
+                  <td>{row.carrier || "-"}</td>
+                  <td>{row.invoice || "-"}</td>
+                  <td>
+                    <span className="tag">
+                      {row.status}
                     </span>
                   </td>
                 </tr>
