@@ -1018,7 +1018,8 @@ function InvoicePage() {
 
 const selectableInvoices = invoiceRows.filter(
   (row) => row.carrier && row.invoice
-  const toggleAllInvoices = () => {
+    );
+    const toggleAllInvoices = () => {
   if (selectedInvoices.length === selectableInvoices.length) {
     setSelectedInvoices([]);
   } else {
