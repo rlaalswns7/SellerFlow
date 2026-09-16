@@ -1007,7 +1007,74 @@ function InvoicePage() {
         status: "송장대기",
       }))
   );
+  const [selectedInvoices, setSelectedInvoices] = useState([]);
+  const toggleInvoice = (id) => {
+  setSelectedInvoices((prev) =>
+    prev.includes(id)
+      ? prev.filter((x) => x !== id)
+      : [...prev, id]
+  );
+};
 
+const selectableInvoices = invoiceRows.filter(
+  (row) => row.carrier && row.invoice
+  const toggleAllInvoices = () => {
+  if (selectedInvoices.length === selectableInvoices.length) {
+    setSelectedInvoices([]);
+  } else {
+    setSelectedInvoices(selectableInvoices.map((row) => row.id));
+  }
+};
+
+const registerSelectedInvoices = () => {
+  if (selectedInvoices.length === 0) {
+    alert("등록할 송장을 선택해주세요.");
+    return;
+  }
+
+  setInvoiceRows((prev) =>
+    prev.map((row) =>
+      selectedInvoices.includes(row.id) &&
+      row.carrier &&
+      row.invoice
+        ? {
+            ...row,
+            status: "등록완료(테스트)",
+          }
+        : row
+    )
+  );
+
+  alert(`${selectedInvoices.length}건을 일괄 등록했습니다.`);
+  setSelectedInvoices([]);
+};
+ const cancelSelectedInvoices = () => {
+  const cancelTargets = invoiceRows.filter(
+    (row) =>
+      selectedInvoices.includes(row.id) &&
+      row.status === "등록완료(테스트)"
+  );
+
+  if (cancelTargets.length === 0) {
+    alert("등록 취소할 송장을 선택해주세요.");
+    return;
+  }
+
+  setInvoiceRows((prev) =>
+    prev.map((row) =>
+      selectedInvoices.includes(row.id) &&
+      row.status === "등록완료(테스트)"
+        ? {
+            ...row,
+            status: row.invoice ? "등록대기" : "송장대기",
+          }
+        : row
+    )
+  );
+
+  alert(`${cancelTargets.length}건의 등록을 취소했습니다.`);
+  setSelectedInvoices([]);
+};
   const handleCsvUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1101,7 +1168,20 @@ const cancelInvoice = (id) => {
           <h1>운송장 관리</h1>
           <p>도매처에서 받은 송장 데이터를 주문번호와 자동 매칭합니다.</p>
         </div>
-
+        <button
+  className="primary"
+  onClick={registerSelectedInvoices}
+  disabled={selectedInvoices.length === 0}
+>
+  선택 송장 일괄등록 ({selectedInvoices.length})
+</button> 
+        <button
+  className="secondary"
+  onClick={cancelSelectedInvoices}
+  disabled={selectedInvoices.length === 0}
+>
+  선택 등록취소 ({selectedInvoices.length})
+</button>
         <label className="primary">
           송장 CSV 불러오기
           <input
@@ -1122,6 +1202,16 @@ const cancelInvoice = (id) => {
           <table>
             <thead>
               <tr>
+              <th>
+  <input
+    type="checkbox"
+    checked={
+      selectableInvoices.length > 0 &&
+      selectedInvoices.length === selectableInvoices.length
+    }
+    onChange={toggleAllInvoices}
+  />
+</th>
                 <th>주문번호</th>
                 <th>상품</th>
                 <th>도매처</th>
@@ -1135,6 +1225,14 @@ const cancelInvoice = (id) => {
             <tbody>
               {invoiceRows.map((row) => (
                 <tr key={row.id}>
+                 <td>
+  <input
+    type="checkbox"
+    disabled={!row.carrier || !row.invoice}
+    checked={selectedInvoices.includes(row.id)}
+    onChange={() => toggleInvoice(row.id)}
+  />
+</td>
                   <td>
                     <strong>{row.id}</strong>
                   </td>
