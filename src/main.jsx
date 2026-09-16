@@ -1082,6 +1082,18 @@ function InvoicePage() {
     })
   );
 };
+const cancelInvoice = (id) => {
+  setInvoiceRows((prev) =>
+    prev.map((row) =>
+      row.id === id
+        ? {
+            ...row,
+            status: row.invoice ? "등록대기" : "송장대기",
+          }
+        : row
+    )
+  );
+};
   return (
     <>
       <div className="head">
@@ -1135,15 +1147,24 @@ function InvoicePage() {
                       {row.status}
                     </span>
                   </td>
-             <td>
-  <button
-    className="secondary"
-    onClick={() => registerInvoice(row.id)}
-    disabled={!row.carrier || !row.invoice}
-  >
-    쿠팡 등록
-  </button>
-</td>
+            <td>
+  {row.status === "등록완료(테스트)" ? (
+    <button
+      className="secondary"
+      onClick={() => cancelInvoice(row.id)}
+    >
+      등록 취소
+    </button>
+  ) : (
+    <button
+      className="secondary"
+      onClick={() => registerInvoice(row.id)}
+      disabled={!row.carrier || !row.invoice}
+    >
+      쿠팡 등록
+    </button>
+  )}
+</td> 
                 </tr>
               ))}
             </tbody>
