@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 
@@ -995,18 +995,35 @@ function ProductLinkPage({ products, setProducts }) {
   );
 }
 function InvoicePage() {
-  const [invoiceRows, setInvoiceRows] = useState(
-    orders
-      .filter((order) => order.supplier !== "미연결")
-      .map((order) => ({
-        id: order.id,
-        product: order.product,
-        supplier: order.supplier,
-        carrier: "",
-        invoice: "",
-        status: "송장대기",
-      }))
+ const [invoiceRows, setInvoiceRows] = useState(() => {
+  const saved = localStorage.getItem("sellerflow_invoices");
+
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch {
+      // 저장 데이터가 깨졌으면 기본값 사용
+    }
+  }
+
+  return orders
+    .filter((order) => order.supplier !== "미연결")
+    .map((order) => ({
+      id: order.id,
+      product: order.product,
+      supplier: order.supplier,
+      carrier: "",
+      invoice: "",
+      status: "송장대기",
+    }));
+});
+
+useEffect(() => {
+  localStorage.setItem(
+    "sellerflow_invoices",
+    JSON.stringify(invoiceRows)
   );
+}, [invoiceRows]); 
   const [selectedInvoices, setSelectedInvoices] = useState([]);
   const toggleInvoice = (id) => {
   setSelectedInvoices((prev) =>
