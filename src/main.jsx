@@ -1065,7 +1065,23 @@ function InvoicePage() {
 
     reader.readAsText(file, "UTF-8");
   };
+  const registerInvoice = (id) => {
+  setInvoiceRows((prev) =>
+    prev.map((row) => {
+      if (row.id !== id) return row;
 
+      if (!row.carrier || !row.invoice) {
+        alert("택배사와 운송장번호가 필요합니다.");
+        return row;
+      }
+
+      return {
+        ...row,
+        status: "등록완료(테스트)",
+      };
+    })
+  );
+};
   return (
     <>
       <div className="head">
@@ -1100,6 +1116,7 @@ function InvoicePage() {
                 <th>택배사</th>
                 <th>운송장번호</th>
                 <th>상태</th>
+             <th>관리</th>
               </tr>
             </thead>
 
@@ -1118,6 +1135,15 @@ function InvoicePage() {
                       {row.status}
                     </span>
                   </td>
+             <td>
+  <button
+    className="secondary"
+    onClick={() => registerInvoice(row.id)}
+    disabled={!row.carrier || !row.invoice}
+  >
+    쿠팡 등록
+  </button>
+</td>
                 </tr>
               ))}
             </tbody>
