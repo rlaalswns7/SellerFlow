@@ -1080,16 +1080,43 @@ const selectableInvoices = invoiceRows.filter(
 };
 
 const registerSelectedInvoices = () => {
-  if (selectedInvoices.length === 0) {
+  const selectedRows = invoiceRows.filter((row) =>
+    selectedInvoices.includes(row.id)
+  );
+
+  if (selectedRows.length === 0) {
     alert("등록할 송장을 선택해주세요.");
+    return;
+  }
+
+  const registerTargets = selectedRows.filter(
+    (row) =>
+      row.carrier &&
+      row.invoice &&
+      row.status !== "등록완료(테스트)"
+  );
+
+  const duplicateTargets = selectedRows.filter(
+    (row) => row.status === "등록완료(테스트)"
+  );
+
+  if (registerTargets.length === 0) {
+    duplicateTargets.forEach((row) => {
+      addInvoiceLog(
+        "중복등록 차단",
+        row,
+        "이미 등록된 송장이어서 일괄등록에서 제외했습니다."
+      );
+    });
+
+    alert("새로 등록할 송장이 없습니다.");
+    setSelectedInvoices([]);
     return;
   }
 
   setInvoiceRows((prev) =>
     prev.map((row) =>
-      selectedInvoices.includes(row.id) &&
-      row.carrier &&
-      row.invoice
+      registerTargets.some((target) => target.id === row.id)
         ? {
             ...row,
             status: "등록완료(테스트)",
@@ -1098,7 +1125,26 @@ const registerSelectedInvoices = () => {
     )
   );
 
-  alert(`${selectedInvoices.length}건을 일괄 등록했습니다.`);
+  registerTargets.forEach((row) => {
+    addInvoiceLog(
+      "일괄 등록 완료",
+      row,
+      `${row.carrier} / ${row.invoice} 일괄등록 완료(테스트)`
+    );
+  });
+
+  duplicateTargets.forEach((row) => {
+    addInvoiceLog(
+      "중복등록 차단",
+      row,
+      "이미 등록된 송장이어서 일괄등록에서 제외했습니다."
+    );
+  });
+
+  alert(
+    `${registerTargets.length}건 등록 완료 / ${duplicateTargets.length}건 중복 제외`
+  );
+
   setSelectedInvoices([]);
 };
  const cancelSelectedInvoices = () => {
