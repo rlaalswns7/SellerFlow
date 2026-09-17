@@ -1025,6 +1025,41 @@ useEffect(() => {
   );
 }, [invoiceRows]); 
   const [selectedInvoices, setSelectedInvoices] = useState([]);
+ const [invoiceLogs, setInvoiceLogs] = useState(() => {
+  const saved = localStorage.getItem("sellerflow_invoice_logs");
+
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+});
+
+useEffect(() => {
+  localStorage.setItem(
+    "sellerflow_invoice_logs",
+    JSON.stringify(invoiceLogs)
+  );
+}, [invoiceLogs]);
+
+const addInvoiceLog = (type, row, message) => {
+  setInvoiceLogs((prev) =>
+    [
+      {
+        id: `${Date.now()}-${row.id}`,
+        time: new Date().toLocaleString("ko-KR"),
+        orderId: row.id,
+        type,
+        message,
+      },
+      ...prev,
+    ].slice(0, 100)
+  );
+};
   const toggleInvoice = (id) => {
   setSelectedInvoices((prev) =>
     prev.includes(id)
@@ -1151,23 +1186,61 @@ const registerSelectedInvoices = () => {
     reader.readAsText(file, "UTF-8");
   };
   const registerInvoice = (id) => {
+  const target = invoiceRows.find((row) => row.id === id);
+  if (!target) return;
+
+  if (target.status === "등록완료(테스트)") {
+    alert("이미 등록된 송장입니다.");
+    addInvoiceLog(
+      "중복등록 차단",
+      target,
+      "이미 등록된 송장의 중복 등록을 차단했습니다."
+    );
+    return;
+  }
+
+  if (!target.carrier || !target.invoice) {
+    alert("택배사와 운송장번호가 필요합니다.");
+    addInvoiceLog(
+      "등록 실패",
+      target,
+      "택배사 또는 운송장번호가 없습니다."
+    );
+    return;
+  }
+
   setInvoiceRows((prev) =>
-    prev.map((row) => {
-      if (row.id !== id) return row;
+    prev.map((row) =>
+      row.id === id
+        ? {
+            ...row,
+            status: "등록완료(테스트)",
+          }
+        : row
+    )
+  );
 
-      if (!row.carrier || !row.invoice) {
-        alert("택배사와 운송장번호가 필요합니다.");
-        return row;
-      }
-
-      return {
-        ...row,
-        status: "등록완료(테스트)",
-      };
-    })
+  addInvoiceLog(
+    "등록 완료",
+    target,
+    `${target.carrier} / ${target.invoice} 등록 완료(테스트)`
   );
 };
 const cancelInvoice = (id) => {
+  const target = invoiceRows.find((row) => row.id === id);
+  if (!target) return;
+
+  if (target.status !== "등록완료(테스트)") {
+    alert("등록 완료된 송장만 취소할 수 있습니다.");
+
+    addInvoiceLog(
+      "취소 실패",
+      target,
+      "등록 완료 상태가 아니어서 취소하지 않았습니다."
+    );
+    return;
+  }
+
   setInvoiceRows((prev) =>
     prev.map((row) =>
       row.id === id
@@ -1177,6 +1250,12 @@ const cancelInvoice = (id) => {
           }
         : row
     )
+  );
+
+  addInvoiceLog(
+    "등록 취소",
+    target,
+    `${target.carrier} / ${target.invoice} 등록 취소(테스트)`
   );
 };
 const editInvoice = (id) => {
@@ -1332,6 +1411,56 @@ const editInvoice = (id) => {
           </table>
         </div>
       </div>
+   <div className="panel" style={{ marginTop: "20px" }}>
+  <div className="head">
+    <div>
+      <h2>운송장 처리 로그</h2>
+      <p>송장 등록, 취소, 실패 기록을 확인합니다.</p>
+    </div>
+
+    <button
+      className="secondary"
+      onClick={() => setInvoiceLogs([])}
+      disabled={invoiceLogs.length === 0}
+    >
+      로그 비우기
+    </button>
+  </div>
+
+  <div className="table">
+    <table>
+      <thead>
+        <tr>
+          <th>시간</th>
+          <th>주문번호</th>
+          <th>처리</th>
+          <th>내용</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {invoiceLogs.length === 0 ? (
+          <tr>
+            <td colSpan="4">아직 처리 기록이 없습니다.</td>
+          </tr>
+        ) : (
+          invoiceLogs.map((log) => (
+            <tr key={log.id}>
+              <td>{log.time}</td>
+              <td>
+                <strong>{log.orderId}</strong>
+              </td>
+              <td>
+                <span className="tag">{log.type}</span>
+              </td>
+              <td>{log.message}</td>
+            </tr>
+          ))
+        )}
+      </tbody>
+    </table>
+  </div>
+</div>
     </>
   );
 }
