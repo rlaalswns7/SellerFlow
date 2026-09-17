@@ -1148,21 +1148,40 @@ const registerSelectedInvoices = () => {
   setSelectedInvoices([]);
 };
  const cancelSelectedInvoices = () => {
-  const cancelTargets = invoiceRows.filter(
-    (row) =>
-      selectedInvoices.includes(row.id) &&
-      row.status === "등록완료(테스트)"
+  const selectedRows = invoiceRows.filter((row) =>
+    selectedInvoices.includes(row.id)
+  );
+
+  if (selectedRows.length === 0) {
+    alert("등록 취소할 송장을 선택해주세요.");
+    return;
+  }
+
+  const cancelTargets = selectedRows.filter(
+    (row) => row.status === "등록완료(테스트)"
+  );
+
+  const excludedTargets = selectedRows.filter(
+    (row) => row.status !== "등록완료(테스트)"
   );
 
   if (cancelTargets.length === 0) {
-    alert("등록 취소할 송장을 선택해주세요.");
+    excludedTargets.forEach((row) => {
+      addInvoiceLog(
+        "취소 제외",
+        row,
+        "등록 완료 상태가 아니어서 일괄취소에서 제외했습니다."
+      );
+    });
+
+    alert("취소할 수 있는 등록완료 송장이 없습니다.");
+    setSelectedInvoices([]);
     return;
   }
 
   setInvoiceRows((prev) =>
     prev.map((row) =>
-      selectedInvoices.includes(row.id) &&
-      row.status === "등록완료(테스트)"
+      cancelTargets.some((target) => target.id === row.id)
         ? {
             ...row,
             status: row.invoice ? "등록대기" : "송장대기",
@@ -1171,7 +1190,26 @@ const registerSelectedInvoices = () => {
     )
   );
 
-  alert(`${cancelTargets.length}건의 등록을 취소했습니다.`);
+  cancelTargets.forEach((row) => {
+    addInvoiceLog(
+      "일괄 등록 취소",
+      row,
+      `${row.carrier} / ${row.invoice} 일괄 등록 취소(테스트)`
+    );
+  });
+
+  excludedTargets.forEach((row) => {
+    addInvoiceLog(
+      "취소 제외",
+      row,
+      "등록 완료 상태가 아니어서 일괄취소에서 제외했습니다."
+    );
+  });
+
+  alert(
+    `${cancelTargets.length}건 취소 완료 / ${excludedTargets.length}건 제외`
+  );
+
   setSelectedInvoices([]);
 };
   const handleCsvUpload = (e) => {
