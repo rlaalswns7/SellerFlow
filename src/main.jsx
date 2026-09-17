@@ -1179,6 +1179,42 @@ const cancelInvoice = (id) => {
     )
   );
 };
+const editInvoice = (id) => {
+  const target = invoiceRows.find((row) => row.id === id);
+  if (!target) return;
+
+  if (target.status === "등록완료(테스트)") {
+    alert("먼저 등록 취소를 해주세요.");
+    return;
+  }
+
+  const carrier = window.prompt("택배사를 입력하세요.", target.carrier);
+  if (carrier === null) return;
+
+  const invoice = window.prompt(
+    "운송장번호를 입력하세요.",
+    target.invoice
+  );
+  if (invoice === null) return;
+
+  if (!carrier.trim() || !invoice.trim()) {
+    alert("택배사와 운송장번호를 모두 입력해주세요.");
+    return;
+  }
+
+  setInvoiceRows((prev) =>
+    prev.map((row) =>
+      row.id === id
+        ? {
+            ...row,
+            carrier: carrier.trim(),
+            invoice: invoice.trim(),
+            status: "등록대기",
+          }
+        : row
+    )
+  );
+};
   return (
     <>
       <div className="head">
@@ -1263,7 +1299,7 @@ const cancelInvoice = (id) => {
                       {row.status}
                     </span>
                   </td>
-            <td>
+           <td>
   {row.status === "등록완료(테스트)" ? (
     <button
       className="secondary"
@@ -1280,7 +1316,16 @@ const cancelInvoice = (id) => {
       쿠팡 등록
     </button>
   )}
-</td> 
+
+  <button
+    className="secondary"
+    onClick={() => editInvoice(row.id)}
+    disabled={row.status === "등록완료(테스트)"}
+    style={{ marginLeft: "8px" }}
+  >
+    수정
+  </button>
+</td>  
                 </tr>
               ))}
             </tbody>
