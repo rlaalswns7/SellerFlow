@@ -997,7 +997,18 @@ function ProductLinkPage({ products, setProducts }) {
   );
 }
 function CSPage() {
-  const inquiries = [
+const [inquiries, setInquiries] = useState(() => {
+  const saved = localStorage.getItem("sellerflow_cs_inquiries");
+
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch {
+      // 저장값이 깨졌으면 기본값 사용
+    }
+  }
+
+  return [
     {
       id: "Q10001",
       orderId: "C10001",
@@ -1006,6 +1017,7 @@ function CSPage() {
       content: "상품은 언제 출고되나요?",
       deadline: "오늘",
       status: "답변대기",
+      answer: "",
     },
     {
       id: "Q10002",
@@ -1015,8 +1027,51 @@ function CSPage() {
       content: "배송지를 변경하고 싶어요.",
       deadline: "1일 남음",
       status: "확인필요",
+      answer: "",
     },
   ];
+});
+
+useEffect(() => {
+  localStorage.setItem(
+    "sellerflow_cs_inquiries",
+    JSON.stringify(inquiries)
+  );
+}, [inquiries]);
+
+const replyInquiry = (id) => {
+  const target = inquiries.find((item) => item.id === id);
+  if (!target) return;
+
+  if (target.status === "답변완료") {
+    alert("이미 답변한 문의입니다.");
+    return;
+  }
+
+  const answer = window.prompt(
+    "고객에게 보낼 답변을 입력하세요.",
+    target.answer || ""
+  );
+
+  if (answer === null) return;
+
+  if (!answer.trim()) {
+    alert("답변 내용을 입력해주세요.");
+    return;
+  }
+
+  setInquiries((prev) =>
+    prev.map((item) =>
+      item.id === id
+        ? {
+            ...item,
+            answer: answer.trim(),
+            status: "답변완료",
+          }
+        : item
+    )
+  );
+};
 const [returnCases, setReturnCases] = useState(() => {
   const saved = localStorage.getItem("sellerflow_cs_returns");
 
@@ -1170,7 +1225,13 @@ const handleReturnCase = (id) => {
                     <span className="tag">{item.status}</span>
                   </td>
                   <td>
-                    <button className="secondary">답변</button>
+                    <button
+  className="secondary"
+  onClick={() => replyInquiry(item.id)}
+  disabled={item.status === "답변완료"}
+>
+  {item.status === "답변완료" ? "답변완료" : "답변"}
+</button>
                   </td>
                 </tr>
               ))}
