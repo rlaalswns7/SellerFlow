@@ -143,6 +143,8 @@ const [products, setProducts] = useState([
 />
 ) : page === "운송장 관리" ? (
   <InvoicePage />
+) : page === "CS 관리" ? (
+  <CSPage />
 ) : (
   <EmptyPage title={page} />
 )}
@@ -984,6 +986,179 @@ function ProductLinkPage({ products, setProducts }) {
                     <span className="tag">
                       {product.supplier ? "연결완료" : "미연결"}
                     </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+function CSPage() {
+  const inquiries = [
+    {
+      id: "Q10001",
+      orderId: "C10001",
+      product: "사과 5kg",
+      customer: "홍길동",
+      content: "상품은 언제 출고되나요?",
+      deadline: "오늘",
+      status: "답변대기",
+    },
+    {
+      id: "Q10002",
+      orderId: "C10003",
+      product: "복숭아 3kg",
+      customer: "이서준",
+      content: "배송지를 변경하고 싶어요.",
+      deadline: "1일 남음",
+      status: "확인필요",
+    },
+  ];
+
+  const returnCases = [
+    {
+      id: "R10001",
+      orderId: "C10001",
+      product: "사과 5kg",
+      customer: "홍길동",
+      reason: "단순변심",
+      shipped: true,
+      status: "처리대기",
+    },
+    {
+      id: "R10002",
+      orderId: "C10003",
+      product: "복숭아 3kg",
+      customer: "이서준",
+      reason: "품질문제",
+      shipped: false,
+      status: "수동검토",
+    },
+  ];
+
+  return (
+    <>
+      <div className="head">
+        <div>
+          <h1>CS 관리</h1>
+          <p>고객문의와 반품·취소 요청을 한 곳에서 관리합니다.</p>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "16px",
+          marginBottom: "20px",
+        }}
+      >
+        <div className="panel">
+          <h2>고객문의</h2>
+          <h1>{inquiries.length}건</h1>
+          <p>답변이 필요한 문의를 확인합니다.</p>
+        </div>
+
+        <div className="panel">
+          <h2>반품 / 취소</h2>
+          <h1>{returnCases.length}건</h1>
+          <p>자동처리 및 수동검토 대상을 확인합니다.</p>
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: "20px" }}>
+        <div className="head">
+          <div>
+            <h2>고객문의</h2>
+            <p>총 {inquiries.length}건</p>
+          </div>
+        </div>
+
+        <div className="table">
+          <table>
+            <thead>
+              <tr>
+                <th>문의번호</th>
+                <th>주문번호</th>
+                <th>상품</th>
+                <th>고객</th>
+                <th>문의내용</th>
+                <th>마감</th>
+                <th>상태</th>
+                <th>작업</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {inquiries.map((item) => (
+                <tr key={item.id}>
+                  <td>
+                    <strong>{item.id}</strong>
+                  </td>
+                  <td>{item.orderId}</td>
+                  <td>{item.product}</td>
+                  <td>{item.customer}</td>
+                  <td>{item.content}</td>
+                  <td>{item.deadline}</td>
+                  <td>
+                    <span className="tag">{item.status}</span>
+                  </td>
+                  <td>
+                    <button className="secondary">답변</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="head">
+          <div>
+            <h2>반품 / 취소</h2>
+            <p>총 {returnCases.length}건</p>
+          </div>
+        </div>
+
+        <div className="table">
+          <table>
+            <thead>
+              <tr>
+                <th>접수번호</th>
+                <th>주문번호</th>
+                <th>상품</th>
+                <th>고객</th>
+                <th>사유</th>
+                <th>출고상태</th>
+                <th>처리상태</th>
+                <th>작업</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {returnCases.map((item) => (
+                <tr key={item.id}>
+                  <td>
+                    <strong>{item.id}</strong>
+                  </td>
+                  <td>{item.orderId}</td>
+                  <td>{item.product}</td>
+                  <td>{item.customer}</td>
+                  <td>{item.reason}</td>
+                  <td>{item.shipped ? "출고됨" : "출고 전"}</td>
+                  <td>
+                    <span className="tag">{item.status}</span>
+                  </td>
+                  <td>
+                    <button className="secondary">
+                      {item.reason === "단순변심"
+                        ? "자동처리"
+                        : "수동검토"}
+                    </button>
                   </td>
                 </tr>
               ))}
