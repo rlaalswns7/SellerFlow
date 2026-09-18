@@ -1017,8 +1017,18 @@ function CSPage() {
       status: "확인필요",
     },
   ];
+const [returnCases, setReturnCases] = useState(() => {
+  const saved = localStorage.getItem("sellerflow_cs_returns");
 
-  const returnCases = [
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch {
+      // 저장값이 깨졌으면 기본값 사용
+    }
+  }
+
+  return [
     {
       id: "R10001",
       orderId: "C10001",
@@ -1027,6 +1037,7 @@ function CSPage() {
       reason: "단순변심",
       shipped: true,
       status: "처리대기",
+      processed: false,
     },
     {
       id: "R10002",
@@ -1036,9 +1047,61 @@ function CSPage() {
       reason: "품질문제",
       shipped: false,
       status: "수동검토",
+      processed: false,
     },
   ];
+});
 
+useEffect(() => {
+  localStorage.setItem(
+    "sellerflow_cs_returns",
+    JSON.stringify(returnCases)
+  );
+}, [returnCases]);
+
+const handleReturnCase = (id) => {
+  const target = returnCases.find((item) => item.id === id);
+  if (!target) return;
+
+  if (target.processed) {
+    alert("이미 처리된 반품/취소 건입니다.");
+    return;
+  }
+
+  if (target.reason !== "단순변심") {
+    setReturnCases((prev) =>
+      prev.map((item) =>
+        item.id === id
+          ? { ...item, status: "수동검토" }
+          : item
+      )
+    );
+
+    alert("품질·오배송·사기의심 건은 자동 처리하지 않습니다.");
+    return;
+  }
+
+  setReturnCases((prev) =>
+    prev.map((item) =>
+      item.id === id
+        ? {
+            ...item,
+            status: item.shipped
+              ? "회수없이 환불완료(테스트)"
+              : "출고중지·환불완료(테스트)",
+            processed: true,
+          }
+        : item
+    )
+  );
+
+  alert(
+    target.shipped
+      ? "이미 출고된 주문입니다. 회수 없이 환불 처리했습니다.(테스트)"
+      : "출고를 중지하고 환불 처리했습니다.(테스트)"
+  );
+};
+ 
   return (
     <>
       <div className="head">
@@ -1154,11 +1217,17 @@ function CSPage() {
                     <span className="tag">{item.status}</span>
                   </td>
                   <td>
-                    <button className="secondary">
-                      {item.reason === "단순변심"
-                        ? "자동처리"
-                        : "수동검토"}
-                    </button>
+                  <button
+  className="secondary"
+  onClick={() => handleReturnCase(item.id)}
+  disabled={item.processed}
+>
+  {item.processed
+    ? "처리완료"
+    : item.reason === "단순변심"
+    ? "자동처리"
+    : "수동검토"}
+</button>  
                   </td>
                 </tr>
               ))}
