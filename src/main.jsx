@@ -1124,17 +1124,49 @@ const handleReturnCase = (id) => {
   }
 
   if (target.reason !== "단순변심") {
-    setReturnCases((prev) =>
-      prev.map((item) =>
-        item.id === id
-          ? { ...item, status: "수동검토" }
-          : item
-      )
-    );
+  const supplier = getSupplierByOrderId(target.orderId);
 
-    alert("품질·오배송·사기의심 건은 자동 처리하지 않습니다.");
+  if (supplier === "미연결") {
+    alert("도매처가 연결되지 않은 주문입니다. 먼저 도매처를 연결해주세요.");
     return;
   }
+
+  const action = window.prompt(
+    `${supplier}에 확인할 처리 방법을 입력하세요.\n\n환불 또는 재배송`,
+    "환불"
+  );
+
+  if (action === null) return;
+
+  const normalizedAction = action.trim();
+
+  if (
+    normalizedAction !== "환불" &&
+    normalizedAction !== "재배송"
+  ) {
+    alert("환불 또는 재배송 중 하나를 입력해주세요.");
+    return;
+  }
+
+  setReturnCases((prev) =>
+    prev.map((item) =>
+      item.id === id
+        ? {
+            ...item,
+            supplier,
+            resolution: normalizedAction,
+            status: `${supplier} 확인대기 · ${normalizedAction}`,
+          }
+        : item
+    )
+  );
+
+  alert(
+    `${supplier} 확인 대상으로 분류했습니다.\n처리 예정: ${normalizedAction}`
+  );
+
+  return;
+}
 
   setReturnCases((prev) =>
     prev.map((item) =>
@@ -1156,7 +1188,47 @@ const handleReturnCase = (id) => {
       : "출고를 중지하고 환불 처리했습니다.(테스트)"
   );
 };
- 
+ const getSupplierByOrderId = (orderId) => {
+  const matchedOrder = orders.find(
+    (order) => order.id === orderId
+  );
+
+  return matchedOrder?.supplier || "미연결";
+};
+const completeManualCase = (id) => {
+  const target = returnCases.find((item) => item.id === id);
+  if (!target) return;
+
+  if (target.processed) {
+    alert("이미 최종 처리된 건입니다.");
+    return;
+  }
+
+  if (!target.supplier || !target.resolution) {
+    alert("먼저 수동검토에서 환불 또는 재배송을 선택해주세요.");
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `${target.supplier} 회신을 확인했나요?\n\n${target.resolution} 완료 처리합니다.`
+  );
+
+  if (!confirmed) return;
+
+  setReturnCases((prev) =>
+    prev.map((item) =>
+      item.id === id
+        ? {
+            ...item,
+            status: `${target.resolution}완료(테스트)`,
+            processed: true,
+          }
+        : item
+    )
+  );
+
+  alert(`${target.resolution} 완료 처리했습니다.(테스트)`);
+};
   return (
     <>
       <div className="head">
@@ -1257,6 +1329,7 @@ const handleReturnCase = (id) => {
                 <th>상품</th>
                 <th>고객</th>
                 <th>사유</th>
+                <th>도매처</th>
                 <th>출고상태</th>
                 <th>처리상태</th>
                 <th>작업</th>
@@ -1273,22 +1346,31 @@ const handleReturnCase = (id) => {
                   <td>{item.product}</td>
                   <td>{item.customer}</td>
                   <td>{item.reason}</td>
+                 <td>{getSupplierByOrderId(item.orderId)}</td>
                   <td>{item.shipped ? "출고됨" : "출고 전"}</td>
                   <td>
                     <span className="tag">{item.status}</span>
                   </td>
                   <td>
-                  <button
+                   <button
   className="secondary"
-  onClick={() => handleReturnCase(item.id)}
+  onClick={() =>
+    item.reason === "단순변심"
+      ? handleReturnCase(item.id)
+      : item.supplier && item.resolution
+      ? completeManualCase(item.id)
+      : handleReturnCase(item.id)
+  }
   disabled={item.processed}
 >
   {item.processed
     ? "처리완료"
     : item.reason === "단순변심"
     ? "자동처리"
+    : item.supplier && item.resolution
+    ? `${item.resolution} 완료처리`
     : "수동검토"}
-</button>  
+</button>
                   </td>
                 </tr>
               ))}
