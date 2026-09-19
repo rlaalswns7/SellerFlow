@@ -1002,7 +1002,7 @@ const [inquiries, setInquiries] = useState(() => {
 
   if (saved) {
     try {
-      return JSON.parse(saved);
+     return JSON.parse(saved); 
     } catch {
       // 저장값이 깨졌으면 기본값 사용
     }
@@ -1077,7 +1077,12 @@ const [returnCases, setReturnCases] = useState(() => {
 
   if (saved) {
     try {
-      return JSON.parse(saved);
+    return JSON.parse(saved).map((item) => ({
+  ...item,
+  evidence: item.evidence || "",
+  supplierReply: item.supplierReply || "",
+  reviewNote: item.reviewNote || "",
+}));  
     } catch {
       // 저장값이 깨졌으면 기본값 사용
     }
@@ -1103,6 +1108,9 @@ const [returnCases, setReturnCases] = useState(() => {
       shipped: false,
       status: "수동검토",
       processed: false,
+      evidence: "",
+supplierReply: "",
+reviewNote: "",
     },
   ];
 });
@@ -1131,9 +1139,28 @@ const handleReturnCase = (id) => {
     return;
   }
 
+  const evidence = window.prompt(
+    "불량/오배송 증빙 내용을 입력하세요.\n예: 사진 확인됨, 박스 파손, 상품 상태 등",
+    target.evidence || ""
+  );
+
+  if (evidence === null) return;
+
+  if (!evidence.trim()) {
+    alert("증빙 내용을 입력해주세요.");
+    return;
+  }
+
+  const reviewNote = window.prompt(
+    "도매처에 전달할 검토 메모를 입력하세요.",
+    target.reviewNote || ""
+  );
+
+  if (reviewNote === null) return;
+
   const action = window.prompt(
     `${supplier}에 확인할 처리 방법을 입력하세요.\n\n환불 또는 재배송`,
-    "환불"
+    target.resolution || "환불"
   );
 
   if (action === null) return;
@@ -1154,6 +1181,8 @@ const handleReturnCase = (id) => {
         ? {
             ...item,
             supplier,
+            evidence: evidence.trim(),
+            reviewNote: reviewNote.trim(),
             resolution: normalizedAction,
             status: `${supplier} 확인대기 · ${normalizedAction}`,
           }
@@ -1162,12 +1191,13 @@ const handleReturnCase = (id) => {
   );
 
   alert(
-    `${supplier} 확인 대상으로 분류했습니다.\n처리 예정: ${normalizedAction}`
+    `${supplier} 확인 대상으로 분류했습니다.\n증빙 저장 완료\n처리 예정: ${normalizedAction}`
   );
 
   return;
 }
 
+  
   setReturnCases((prev) =>
     prev.map((item) =>
       item.id === id
@@ -1208,7 +1238,17 @@ const completeManualCase = (id) => {
     alert("먼저 수동검토에서 환불 또는 재배송을 선택해주세요.");
     return;
   }
+  const supplierReply = window.prompt(
+  `${target.supplier}에서 받은 회신 내용을 입력하세요.`,
+  target.supplierReply || ""
+);
 
+if (supplierReply === null) return;
+
+if (!supplierReply.trim()) {
+  alert("도매처 회신 내용을 입력해주세요.");
+  return;
+}
   const confirmed = window.confirm(
     `${target.supplier} 회신을 확인했나요?\n\n${target.resolution} 완료 처리합니다.`
   );
@@ -1221,7 +1261,8 @@ const completeManualCase = (id) => {
         ? {
             ...item,
             status: `${target.resolution}완료(테스트)`,
-            processed: true,
+supplierReply: supplierReply.trim(),
+processed: true,
           }
         : item
     )
