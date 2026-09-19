@@ -1454,7 +1454,21 @@ const removeEvidenceImage = (id, index) => {
     "-"
   ) : (
     <div>
-      <label className="secondary" style={{ cursor: "pointer" }}>
+     <label
+  style={{
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "8px 12px",
+    borderRadius: "10px",
+    border: "1px solid #e5e7eb",
+    background: "#f3f4f6",
+    fontSize: "13px",
+    fontWeight: "700",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  }}
+> 
         사진 추가
         <input
           type="file"
