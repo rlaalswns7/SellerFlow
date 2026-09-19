@@ -1077,9 +1077,10 @@ const [returnCases, setReturnCases] = useState(() => {
 
   if (saved) {
     try {
-    return JSON.parse(saved).map((item) => ({
+   return JSON.parse(saved).map((item) => ({
   ...item,
   evidence: item.evidence || "",
+  evidenceImages: item.evidenceImages || [],
   supplierReply: item.supplierReply || "",
   reviewNote: item.reviewNote || "",
 }));  
@@ -1109,7 +1110,8 @@ const [returnCases, setReturnCases] = useState(() => {
       status: "수동검토",
       processed: false,
       evidence: "",
-supplierReply: "",
+      evidenceImages: [],
+      supplierReply: "",
 reviewNote: "",
     },
   ];
@@ -1270,6 +1272,64 @@ processed: true,
 
   alert(`${target.resolution} 완료 처리했습니다.(테스트)`);
 };
+ const handleEvidenceImageUpload = (id, e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  if (!file.type.startsWith("image/")) {
+    alert("이미지 파일만 첨부할 수 있습니다.");
+    return;
+  }
+
+  if (file.size > 1500 * 1024) {
+    alert("사진은 1.5MB 이하만 첨부할 수 있습니다.");
+    return;
+  }
+
+  const target = returnCases.find((item) => item.id === id);
+  if (!target) return;
+
+  if ((target.evidenceImages || []).length >= 3) {
+    alert("증빙 사진은 최대 3장까지 첨부할 수 있습니다.");
+    return;
+  }
+
+  const reader = new FileReader();
+
+  reader.onload = () => {
+    setReturnCases((prev) =>
+      prev.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              evidenceImages: [
+                ...(item.evidenceImages || []),
+                reader.result,
+              ],
+            }
+          : item
+      )
+    );
+  };
+
+  reader.readAsDataURL(file);
+  e.target.value = "";
+};
+
+const removeEvidenceImage = (id, index) => {
+  setReturnCases((prev) =>
+    prev.map((item) =>
+      item.id === id
+        ? {
+            ...item,
+            evidenceImages: (item.evidenceImages || []).filter(
+              (_, i) => i !== index
+            ),
+          }
+        : item
+    )
+  );
+};
   return (
     <>
       <div className="head">
@@ -1371,6 +1431,7 @@ processed: true,
                 <th>고객</th>
                 <th>사유</th>
                 <th>도매처</th>
+              <th>증빙</th>
                 <th>출고상태</th>
                 <th>처리상태</th>
                 <th>작업</th>
@@ -1388,6 +1449,63 @@ processed: true,
                   <td>{item.customer}</td>
                   <td>{item.reason}</td>
                  <td>{getSupplierByOrderId(item.orderId)}</td>
+                <td>
+  {item.reason === "단순변심" ? (
+    "-"
+  ) : (
+    <div>
+      <label className="secondary" style={{ cursor: "pointer" }}>
+        사진 추가
+        <input
+          type="file"
+          accept="image/*"
+          onChange={(e) =>
+            handleEvidenceImageUpload(item.id, e)
+          }
+          style={{ display: "none" }}
+        />
+      </label>
+
+      <div
+        style={{
+          display: "flex",
+          gap: "6px",
+          marginTop: "8px",
+          flexWrap: "wrap",
+        }}
+      >
+        {(item.evidenceImages || []).map((image, index) => (
+          <div key={index}>
+            <img
+              src={image}
+              alt={`증빙 ${index + 1}`}
+              style={{
+                width: "55px",
+                height: "55px",
+                objectFit: "cover",
+                borderRadius: "8px",
+              }}
+            />
+
+            <button
+              className="secondary"
+              onClick={() =>
+                removeEvidenceImage(item.id, index)
+              }
+              style={{
+                display: "block",
+                marginTop: "3px",
+                fontSize: "11px",
+              }}
+            >
+              삭제
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )}
+</td>
                   <td>{item.shipped ? "출고됨" : "출고 전"}</td>
                   <td>
                     <span className="tag">{item.status}</span>
