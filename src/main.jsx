@@ -1116,8 +1116,8 @@ reviewNote: "",
     },
   ];
 });
-
-useEffect(() => {
+const [selectedReturnCase, setSelectedReturnCase] = useState(null);
+  useEffect(() => {
   localStorage.setItem(
     "sellerflow_cs_returns",
     JSON.stringify(returnCases)
@@ -1330,6 +1330,8 @@ const removeEvidenceImage = (id, index) => {
     )
   );
 };
+const selectedCase =
+  returnCases.find((item) => item.id === selectedReturnCase) || null;
   return (
     <>
       <div className="head">
@@ -1544,6 +1546,13 @@ const removeEvidenceImage = (id, index) => {
     ? `${item.resolution} 완료처리`
     : "수동검토"}
 </button>
+                <button
+  className="secondary"
+  onClick={() => setSelectedReturnCase(item.id)}
+  style={{ marginLeft: "6px" }}
+>
+  상세보기
+</button>
                   </td>
                 </tr>
               ))}
@@ -1551,6 +1560,129 @@ const removeEvidenceImage = (id, index) => {
           </table>
         </div>
       </div>
+ {selectedCase && (
+  <div className="panel" style={{ marginTop: "20px" }}>
+    <div className="head">
+      <div>
+        <h2>CS 상세보기</h2>
+        <p>
+          {selectedCase.id} · {selectedCase.orderId}
+        </p>
+      </div>
+
+      <button
+        className="secondary"
+        onClick={() => setSelectedReturnCase(null)}
+      >
+        닫기
+      </button>
+    </div>
+
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        gap: "16px",
+      }}
+    >
+      <div>
+        <strong>상품</strong>
+        <p>{selectedCase.product}</p>
+      </div>
+
+      <div>
+        <strong>고객</strong>
+        <p>{selectedCase.customer}</p>
+      </div>
+
+      <div>
+        <strong>사유</strong>
+        <p>{selectedCase.reason}</p>
+      </div>
+
+      <div>
+        <strong>도매처</strong>
+        <p>
+          {selectedCase.supplier ||
+            getSupplierByOrderId(selectedCase.orderId)}
+        </p>
+      </div>
+
+      <div>
+        <strong>출고상태</strong>
+        <p>{selectedCase.shipped ? "출고됨" : "출고 전"}</p>
+      </div>
+
+      <div>
+        <strong>처리상태</strong>
+        <p>
+          <span className="tag">
+            {selectedCase.status}
+          </span>
+        </p>
+      </div>
+    </div>
+
+    <div style={{ marginTop: "20px" }}>
+      <strong>증빙 내용</strong>
+      <p>{selectedCase.evidence || "등록된 증빙 내용이 없습니다."}</p>
+    </div>
+
+    <div style={{ marginTop: "20px" }}>
+      <strong>증빙 사진</strong>
+
+      {(selectedCase.evidenceImages || []).length === 0 ? (
+        <p>첨부된 사진이 없습니다.</p>
+      ) : (
+        <div
+          style={{
+            display: "flex",
+            gap: "10px",
+            flexWrap: "wrap",
+            marginTop: "10px",
+          }}
+        >
+          {(selectedCase.evidenceImages || []).map(
+            (image, index) => (
+              <img
+                key={index}
+                src={image}
+                alt={`증빙 ${index + 1}`}
+                style={{
+                  width: "110px",
+                  height: "110px",
+                  objectFit: "cover",
+                  borderRadius: "12px",
+                }}
+              />
+            )
+          )}
+        </div>
+      )}
+    </div>
+
+    <div style={{ marginTop: "20px" }}>
+      <strong>검토 메모</strong>
+      <p>
+        {selectedCase.reviewNote ||
+          "등록된 검토 메모가 없습니다."}
+      </p>
+    </div>
+
+    <div style={{ marginTop: "20px" }}>
+      <strong>도매처 회신</strong>
+      <p>
+        {selectedCase.supplierReply ||
+          "아직 도매처 회신이 없습니다."}
+      </p>
+    </div>
+
+    <div style={{ marginTop: "20px" }}>
+      <strong>처리 결과</strong>
+      <p>{selectedCase.resolution || "아직 결정되지 않음"}</p>
+    </div>
+  </div>
+)}
     </>
   );
 }
