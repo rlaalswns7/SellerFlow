@@ -1123,7 +1123,40 @@ const [selectedReturnCase, setSelectedReturnCase] = useState(null);
     JSON.stringify(returnCases)
   );
 }, [returnCases]);
+const [csLogs, setCsLogs] = useState(() => {
+  const saved = localStorage.getItem("sellerflow_cs_logs");
 
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch {
+      // 저장값이 깨졌으면 빈 로그 사용
+    }
+  }
+
+  return [];
+});
+
+useEffect(() => {
+  localStorage.setItem(
+    "sellerflow_cs_logs",
+    JSON.stringify(csLogs)
+  );
+}, [csLogs]);
+
+const addCsLog = (type, target, message) => {
+  setCsLogs((prev) => [
+    {
+      id: `${Date.now()}-${prev.length}`,
+      time: new Date().toLocaleString("ko-KR"),
+      caseId: target.id,
+      orderId: target.orderId,
+      type,
+      message,
+    },
+    ...prev,
+  ]);
+};
 const handleReturnCase = (id) => {
   const target = returnCases.find((item) => item.id === id);
   if (!target) return;
@@ -1191,7 +1224,11 @@ const handleReturnCase = (id) => {
         : item
     )
   );
-
+addCsLog(
+  "수동검토 시작",
+  target,
+  `${supplier} · ${normalizedAction} 요청 · 증빙 확인`
+);
   alert(
     `${supplier} 확인 대상으로 분류했습니다.\n증빙 저장 완료\n처리 예정: ${normalizedAction}`
   );
@@ -1213,7 +1250,13 @@ const handleReturnCase = (id) => {
         : item
     )
   );
-
+addCsLog(
+  "자동처리 완료",
+  target,
+  target.shipped
+    ? "단순변심 · 출고됨 · 회수 없이 환불 처리"
+    : "단순변심 · 출고 전 · 출고중지 후 환불 처리"
+);
   alert(
     target.shipped
       ? "이미 출고된 주문입니다. 회수 없이 환불 처리했습니다.(테스트)"
@@ -1256,7 +1299,11 @@ if (!supplierReply.trim()) {
   );
 
   if (!confirmed) return;
-
+addCsLog(
+  "도매처 회신",
+  target,
+  `${target.supplier} · ${supplierReply.trim()}`
+);
   setReturnCases((prev) =>
     prev.map((item) =>
       item.id === id
@@ -1269,7 +1316,11 @@ processed: true,
         : item
     )
   );
-
+addCsLog(
+  "처리 완료",
+  target,
+  `${target.supplier} · ${target.resolution} 완료`
+);
   alert(`${target.resolution} 완료 처리했습니다.(테스트)`);
 };
  const handleEvidenceImageUpload = (id, e) => {
@@ -1683,6 +1734,60 @@ const selectedCase =
     </div>
   </div>
 )}
+<div className="panel" style={{ marginTop: "20px" }}>
+  <div className="head">
+    <div>
+      <h2>CS 처리 로그</h2>
+      <p>반품·취소 처리 내역을 확인합니다.</p>
+    </div>
+
+    <button
+      className="secondary"
+      onClick={() => {
+        if (window.confirm("CS 처리 로그를 모두 삭제할까요?")) {
+          setCsLogs([]);
+        }
+      }}
+      disabled={csLogs.length === 0}
+    >
+      로그 비우기
+    </button>
+  </div>
+
+  <div className="table">
+    <table>
+      <thead>
+        <tr>
+          <th>시간</th>
+          <th>접수번호</th>
+          <th>주문번호</th>
+          <th>처리유형</th>
+          <th>내용</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {csLogs.length === 0 ? (
+          <tr>
+            <td colSpan="5">아직 CS 처리 기록이 없습니다.</td>
+          </tr>
+        ) : (
+          csLogs.map((log) => (
+            <tr key={log.id}>
+              <td>{log.time}</td>
+              <td><strong>{log.caseId}</strong></td>
+              <td>{log.orderId}</td>
+              <td>
+                <span className="tag">{log.type}</span>
+              </td>
+              <td>{log.message}</td>
+            </tr>
+          ))
+        )}
+      </tbody>
+    </table>
+  </div>
+</div>
     </>
   );
 }
