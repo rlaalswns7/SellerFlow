@@ -76,7 +76,8 @@ const sales30 = [
 
 function App() {
   const [page, setPage] = useState("대시보드");
-const [products, setProducts] = useState([
+const [invoiceFilter, setInvoiceFilter] = useState("all");
+  const [products, setProducts] = useState([
   {
     id: 1,
     name: "사과 5kg",
@@ -116,7 +117,13 @@ const [products, setProducts] = useState([
           <button
             key={name}
             className={page === name ? "active" : ""}
-            onClick={() => setPage(name)}
+           onClick={() => {
+  if (name === "운송장 관리") {
+    setInvoiceFilter("all");
+  }
+
+  setPage(name);
+}} 
           >
             <em>{icon}</em>
             {name}
@@ -131,7 +138,10 @@ const [products, setProducts] = useState([
 
         <section className="content">
           {page === "대시보드" ? (
- <Dashboard setPage={setPage} /> 
+ <Dashboard
+  setPage={setPage}
+  setInvoiceFilter={setInvoiceFilter}
+/>
 ) : page === "주문내역" ? (
   <OrderPage products={products} />
 ) : page === "도매처 관리" ? (
@@ -142,7 +152,7 @@ const [products, setProducts] = useState([
   setProducts={setProducts}
 />
 ) : page === "운송장 관리" ? (
-  <InvoicePage />
+  <InvoicePage invoiceFilter={invoiceFilter} />
 ) : page === "CS 관리" ? (
   <CSPage />
 ) : (
@@ -154,7 +164,7 @@ const [products, setProducts] = useState([
   );
 }
 
-function Dashboard({ setPage }) {
+function Dashboard({ setPage, setInvoiceFilter }) {
   const [range, setRange] = useState(7);
 
   const data = useMemo(
@@ -217,14 +227,20 @@ const urgentCsCount = useMemo(() => {
           count="2"
           title="운송장 대기"
           description="도매처에 송장 받기"
-     onClick={() => setPage("운송장 관리")} 
+    onClick={() => {
+  setInvoiceFilter("waiting");
+  setPage("운송장 관리");
+}}  
           />
 
         <StatusCard
           count="1"
           title="쿠팡 등록 가능"
           description="자동 등록 준비됨"
-      onClick={() => setPage("운송장 관리")}
+    onClick={() => {
+  setInvoiceFilter("ready");
+  setPage("운송장 관리");
+}}  
           />
       </div>
 
@@ -1893,7 +1909,7 @@ const sortedInquiries = [...inquiries].sort(
     </>
   );
 }
-function InvoicePage() {
+function InvoicePage({ invoiceFilter }) {
  const [invoiceRows, setInvoiceRows] = useState(() => {
   const saved = localStorage.getItem("sellerflow_invoices");
 
@@ -1916,7 +1932,17 @@ function InvoicePage() {
       status: "송장대기",
     }));
 });
+const filteredInvoiceRows = invoiceRows.filter((row) => {
+  if (invoiceFilter === "waiting") {
+    return row.status === "송장대기";
+  }
 
+  if (invoiceFilter === "ready") {
+    return row.status === "등록대기";
+  }
+
+  return true;
+});
 useEffect(() => {
   localStorage.setItem(
     "sellerflow_invoices",
@@ -2339,7 +2365,7 @@ const editInvoice = (id) => {
             </thead>
 
             <tbody>
-              {invoiceRows.map((row) => (
+             {filteredInvoiceRows.map((row) => ( 
                 <tr key={row.id}>
                  <td>
   <input
