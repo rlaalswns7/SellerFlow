@@ -502,7 +502,10 @@ useEffect(() => {
   };
 
   const selectableOrders = matchedOrders.filter(
-    (o) => o.supplier !== "미연결"
+  (o) =>
+    o.supplier !== "미연결" &&
+    o.purchaseStatus !== "발주완료"
+);
   );
 
   const toggleAll = () => {
@@ -512,7 +515,30 @@ useEffect(() => {
       setSelected(selectableOrders.map((o) => o.id));
     }
   };
+const cancelPurchaseOrder = (id) => {
+  const target = orderList.find((order) => order.id === id);
 
+  if (!target) return;
+
+  if (target.invoiceStatus !== "송장대기") {
+    alert("이미 송장 처리가 진행된 주문은 발주 취소할 수 없습니다.");
+    return;
+  }
+
+  if (!confirm(`${id} 주문의 발주를 취소할까요?`)) return;
+
+  setOrderList((prev) =>
+    prev.map((order) =>
+      order.id === id
+        ? {
+            ...order,
+            purchaseStatus: "발주대기",
+            invoiceStatus: "송장대기",
+          }
+        : order
+    )
+  );
+};
   const createPurchaseOrder = () => {
     const targetOrders = matchedOrders.filter((o) =>
       selected.includes(o.id)
@@ -667,7 +693,8 @@ setSelected([]);
             <tbody>
               {matchedOrders.map((o) => {
                 const canOrder =
-                  o.supplier !== "미연결";
+  o.supplier !== "미연결" &&
+  o.purchaseStatus !== "발주완료";
 
                 return (
                   <tr key={o.id}>
@@ -700,6 +727,14 @@ setSelected([]);
   <span className="tag">
     {o.invoiceStatus}
   </span>
+{o.purchaseStatus === "발주완료" && (
+  <button
+    onClick={() => cancelPurchaseOrder(o.id)}
+    style={{ marginLeft: "8px" }}
+  >
+    발주 취소
+  </button>
+)}  
 </td>
                   </tr>
                );
