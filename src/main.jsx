@@ -722,11 +722,6 @@ setSelected([]);
   <span className="tag">
     {o.supplier === "미연결" ? "도매처 연결 필요" : o.purchaseStatus}
   </span>
-</td>
-<td>
-  <span className="tag">
-    {o.invoiceStatus}
-  </span>
 {o.purchaseStatus === "발주완료" &&
   o.invoiceStatus === "송장대기" && (
   <button
@@ -736,6 +731,12 @@ setSelected([]);
     발주 취소
   </button>
 )}  
+</td>
+<td>
+  <span className="tag">
+    {o.invoiceStatus}
+  </span>
+  
 </td>
                   </tr>
                );
