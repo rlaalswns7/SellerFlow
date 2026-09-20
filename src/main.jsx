@@ -218,15 +218,29 @@ const urgentCsCount = useMemo(() => {
     ).length,
   };
 }, []);
- const connectionNeededCount = orders.filter(
+ const dashboardOrders = useMemo(() => {
+  const saved = localStorage.getItem("sellerflow_orders");
+
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch {
+      return orders;
+    }
+  }
+
+  return orders;
+}, []);
+
+const connectionNeededCount = dashboardOrders.filter(
   (order) => order.supplier === "미연결"
 ).length;
 
-const purchaseWaitingCount = orders.filter(
+const purchaseWaitingCount = dashboardOrders.filter(
   (order) =>
     order.supplier !== "미연결" &&
     order.purchaseStatus === "발주대기"
-).length; 
+).length;
   return (
     <>
       <div className="head">
@@ -449,7 +463,26 @@ function SalesChart({ data }) {
 
 function OrderPage({ products }) {
   const [selected, setSelected] = useState([]);
- const [orderList, setOrderList] = useState(orders);
+ const [orderList, setOrderList] = useState(() => {
+  const saved = localStorage.getItem("sellerflow_orders");
+
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch {
+      return orders;
+    }
+  }
+
+  return orders;
+});
+
+useEffect(() => {
+  localStorage.setItem(
+    "sellerflow_orders",
+    JSON.stringify(orderList)
+  );
+}, [orderList]);
  const matchedOrders = orderList.map((order) => { 
   const linkedProduct = products.find(
     (product) => product.name === order.product
