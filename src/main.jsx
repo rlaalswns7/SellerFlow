@@ -131,7 +131,7 @@ const [products, setProducts] = useState([
 
         <section className="content">
           {page === "대시보드" ? (
-  <Dashboard />
+ <Dashboard setPage={setPage} /> 
 ) : page === "주문내역" ? (
   <OrderPage products={products} />
 ) : page === "도매처 관리" ? (
@@ -154,14 +154,30 @@ const [products, setProducts] = useState([
   );
 }
 
-function Dashboard() {
+function Dashboard({ setPage }) {
   const [range, setRange] = useState(7);
 
   const data = useMemo(
     () => sales30.slice(-range),
     [range]
   );
+const urgentCsCount = useMemo(() => {
+  const saved = localStorage.getItem("sellerflow_cs_inquiries");
 
+  if (!saved) return 0;
+
+  try {
+    const inquiries = JSON.parse(saved);
+
+    return inquiries.filter(
+      (item) =>
+        item.deadline === "오늘" &&
+        item.status !== "답변완료"
+    ).length;
+  } catch {
+    return 0;
+  }
+}, []);
   return (
     <>
       <div className="head">
@@ -179,7 +195,16 @@ function Dashboard() {
           title="연결 필요"
           description="도매처 연결 필요"
         />
-
+<StatusCard
+  count={`${urgentCsCount}`}
+  title="CS 마감 임박"
+  description={
+    urgentCsCount > 0
+      ? "오늘까지 답변 필요"
+      : "긴급 CS 없음"
+  } 
+  onClick={() => setPage("CS 관리")}
+/>
         <StatusCard
           count="2"
           title="주문서 대기"
@@ -240,10 +265,13 @@ function Dashboard() {
     </>
   );
 }
-
-function StatusCard({ count, title, description }) {
+function StatusCard({ count, title, description, onClick }) {
   return (
-    <div className="card">
+    <div
+  className="card"
+  onClick={onClick}
+  style={{ cursor: onClick ? "pointer" : "default" }}
+>
       <div className="cardTop">
         <span>처리 현황</span>
         <i>→</i>
