@@ -719,18 +719,25 @@ setSelected([]);
 <td>₩{o.saleAmount.toLocaleString()}</td>
 <td>{o.supplier}</td>
 <td>
-  <span className="tag">
-    {o.supplier === "미연결" ? "도매처 연결 필요" : o.purchaseStatus}
-  </span>
-{o.purchaseStatus === "발주완료" &&
-  o.invoiceStatus === "송장대기" && (
-  <button
-    onClick={() => cancelPurchaseOrder(o.id)}
-    style={{ marginLeft: "8px" }}
+  <div
+    style={{
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      whiteSpace: "nowrap",
+    }}
   >
-    발주 취소
-  </button>
-)}  
+    <span className="tag">
+      {o.supplier === "미연결" ? "도매처 연결 필요" : o.purchaseStatus}
+    </span>
+
+    {o.purchaseStatus === "발주완료" &&
+      o.invoiceStatus === "송장대기" && (
+        <button onClick={() => cancelPurchaseOrder(o.id)}>
+          발주 취소
+        </button>
+      )}
+  </div>
 </td>
 <td>
   <span className="tag">
