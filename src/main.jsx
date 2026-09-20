@@ -218,6 +218,15 @@ const urgentCsCount = useMemo(() => {
     ).length,
   };
 }, []);
+ const connectionNeededCount = orders.filter(
+  (order) => order.supplier === "미연결"
+).length;
+
+const purchaseWaitingCount = orders.filter(
+  (order) =>
+    order.supplier !== "미연결" &&
+    order.purchaseStatus === "발주대기"
+).length; 
   return (
     <>
       <div className="head">
@@ -231,7 +240,7 @@ const urgentCsCount = useMemo(() => {
 
       <div className="cards">
         <StatusCard
-          count="1"
+          count={`${connectionNeededCount}`}
           title="연결 필요"
           description="도매처 연결 필요"
      onClick={() => setPage("상품 연결")}  
@@ -247,7 +256,7 @@ const urgentCsCount = useMemo(() => {
   onClick={() => setPage("CS 관리")}
 />
         <StatusCard
-          count="2"
+         count={`${purchaseWaitingCount}`} 
           title="주문서 대기"
           description="도매처에 엑셀 전달"
      onClick={() => setPage("주문내역")}
