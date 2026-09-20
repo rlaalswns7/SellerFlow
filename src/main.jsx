@@ -727,7 +727,8 @@ setSelected([]);
   <span className="tag">
     {o.invoiceStatus}
   </span>
-{o.purchaseStatus === "발주완료" && (
+{o.purchaseStatus === "발주완료" &&
+  o.invoiceStatus === "송장대기" && (
   <button
     onClick={() => cancelPurchaseOrder(o.id)}
     style={{ marginLeft: "8px" }}
