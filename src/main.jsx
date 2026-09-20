@@ -1388,6 +1388,17 @@ const removeEvidenceImage = (id, index) => {
 };
 const selectedCase =
   returnCases.find((item) => item.id === selectedReturnCase) || null;
+ const pendingInquiryCount = inquiries.filter(
+  (item) => item.status !== "답변완료"
+).length;
+
+const manualReviewCount = returnCases.filter(
+  (item) => !item.processed && item.reason !== "단순변심"
+).length;
+
+const completedCsCount =
+  inquiries.filter((item) => item.status === "답변완료").length +
+  returnCases.filter((item) => item.processed).length;
   return (
     <>
       <div className="head">
@@ -1396,28 +1407,33 @@ const selectedCase =
           <p>고객문의와 반품·취소 요청을 한 곳에서 관리합니다.</p>
         </div>
       </div>
+<div
+  style={{
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    gap: "16px",
+    marginBottom: "20px",
+  }}
+>
+  <div className="panel">
+    <h2>답변 대기</h2>
+    <h1>{pendingInquiryCount}건</h1>
+    <p>아직 답변하지 않은 고객문의입니다.</p>
+  </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: "16px",
-          marginBottom: "20px",
-        }}
-      >
-        <div className="panel">
-          <h2>고객문의</h2>
-          <h1>{inquiries.length}건</h1>
-          <p>답변이 필요한 문의를 확인합니다.</p>
-        </div>
+  <div className="panel">
+    <h2>수동 검토</h2>
+    <h1>{manualReviewCount}건</h1>
+    <p>확인이 필요한 반품·취소 요청입니다.</p>
+  </div>
 
-        <div className="panel">
-          <h2>반품 / 취소</h2>
-          <h1>{returnCases.length}건</h1>
-          <p>자동처리 및 수동검토 대상을 확인합니다.</p>
-        </div>
-      </div>
-
+  <div className="panel">
+    <h2>처리 완료</h2>
+    <h1>{completedCsCount}건</h1>
+    <p>답변 또는 CS 처리가 완료된 건입니다.</p>
+  </div>
+</div>
+     
       <div className="panel" style={{ marginBottom: "20px" }}>
         <div className="head">
           <div>
