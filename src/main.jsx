@@ -1503,7 +1503,8 @@ const sortedInquiries = [...inquiries].sort(
   <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
     <span>{item.deadline}</span>
 
-    {item.deadline === "오늘" && (
+    {item.deadline === "오늘" &&
+  item.status !== "답변완료" && (
       <span
         className="tag"
         style={{
