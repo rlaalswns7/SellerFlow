@@ -1071,6 +1071,11 @@ const replyInquiry = (id) => {
         : item
     )
   );
+ addCsLog(
+  "고객문의 답변",
+  target,
+  `답변완료 · ${answer.trim()}`
+); 
 };
 const [returnCases, setReturnCases] = useState(() => {
   const saved = localStorage.getItem("sellerflow_cs_returns");
