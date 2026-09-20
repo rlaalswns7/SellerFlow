@@ -1399,6 +1399,25 @@ const manualReviewCount = returnCases.filter(
 const completedCsCount =
   inquiries.filter((item) => item.status === "답변완료").length +
   returnCases.filter((item) => item.processed).length;
+const urgentInquiryCount = inquiries.filter(
+  (item) =>
+    item.deadline === "오늘" &&
+    item.status !== "답변완료"
+).length;
+  const getDeadlinePriority = (deadline) => {
+  if (deadline === "오늘") return 0;
+
+  const match = deadline?.match(/(\d+)일/);
+  if (match) return Number(match[1]);
+
+  return 999;
+};
+
+const sortedInquiries = [...inquiries].sort(
+  (a, b) =>
+    getDeadlinePriority(a.deadline) -
+    getDeadlinePriority(b.deadline)
+);
   return (
     <>
       <div className="head">
@@ -1418,7 +1437,20 @@ const completedCsCount =
   <div className="panel">
     <h2>답변 대기</h2>
     <h1>{pendingInquiryCount}건</h1>
-    <p>아직 답변하지 않은 고객문의입니다.</p>
+    <p>
+  아직 답변하지 않은 고객문의입니다.
+  {urgentInquiryCount > 0 && (
+    <span
+      style={{
+        marginLeft: "8px",
+        color: "#dc2626",
+        fontWeight: "700",
+      }}
+    >
+      마감 임박 {urgentInquiryCount}건
+    </span>
+  )}
+</p>
   </div>
 
   <div className="panel">
@@ -1458,7 +1490,7 @@ const completedCsCount =
             </thead>
 
             <tbody>
-              {inquiries.map((item) => (
+              {sortedInquiries.map((item) => (
                 <tr key={item.id}>
                   <td>
                     <strong>{item.id}</strong>
@@ -1467,7 +1499,23 @@ const completedCsCount =
                   <td>{item.product}</td>
                   <td>{item.customer}</td>
                   <td>{item.content}</td>
-                  <td>{item.deadline}</td>
+                  <td>
+  <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+    <span>{item.deadline}</span>
+
+    {item.deadline === "오늘" && (
+      <span
+        className="tag"
+        style={{
+          background: "#fee2e2",
+          color: "#dc2626",
+        }}
+      >
+        마감 임박
+      </span>
+    )}
+  </div>
+</td>
                   <td>
                     <span className="tag">{item.status}</span>
                   </td>
