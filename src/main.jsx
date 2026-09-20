@@ -194,7 +194,8 @@ const urgentCsCount = useMemo(() => {
           count="1"
           title="연결 필요"
           description="도매처 연결 필요"
-        />
+     onClick={() => setPage("상품 연결")}  
+          />
 <StatusCard
   count={`${urgentCsCount}`}
   title="CS 마감 임박"
@@ -209,19 +210,22 @@ const urgentCsCount = useMemo(() => {
           count="2"
           title="주문서 대기"
           description="도매처에 엑셀 전달"
-        />
+     onClick={() => setPage("주문내역")}
+          />
 
         <StatusCard
           count="2"
           title="운송장 대기"
           description="도매처에 송장 받기"
-        />
+     onClick={() => setPage("운송장 관리")} 
+          />
 
         <StatusCard
           count="1"
           title="쿠팡 등록 가능"
           description="자동 등록 준비됨"
-        />
+      onClick={() => setPage("운송장 관리")}
+          />
       </div>
 
       <div className="panel">
