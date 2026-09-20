@@ -188,6 +188,36 @@ const urgentCsCount = useMemo(() => {
     return 0;
   }
 }, []);
+  const { waitingInvoiceCount, readyInvoiceCount } = useMemo(() => {
+  const saved = localStorage.getItem("sellerflow_invoices");
+
+  let rows = [];
+
+  if (saved) {
+    try {
+      rows = JSON.parse(saved);
+    } catch {
+      rows = [];
+    }
+  } else {
+    rows = orders
+      .filter((order) => order.supplier !== "미연결")
+      .map((order) => ({
+        id: order.id,
+        status: "송장대기",
+      }));
+  }
+
+  return {
+    waitingInvoiceCount: rows.filter(
+      (row) => row.status === "송장대기"
+    ).length,
+
+    readyInvoiceCount: rows.filter(
+      (row) => row.status === "등록대기"
+    ).length,
+  };
+}, []);
   return (
     <>
       <div className="head">
@@ -224,7 +254,7 @@ const urgentCsCount = useMemo(() => {
           />
 
         <StatusCard
-          count="2"
+        count={`${waitingInvoiceCount}`}  
           title="운송장 대기"
           description="도매처에 송장 받기"
     onClick={() => {
@@ -234,7 +264,7 @@ const urgentCsCount = useMemo(() => {
           />
 
         <StatusCard
-          count="1"
+          count={`${readyInvoiceCount}`}
           title="쿠팡 등록 가능"
           description="자동 등록 준비됨"
     onClick={() => {
