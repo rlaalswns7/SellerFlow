@@ -506,7 +506,7 @@ useEffect(() => {
     o.supplier !== "미연결" &&
     o.purchaseStatus !== "발주완료"
 );
-  );
+  
 
   const toggleAll = () => {
     if (selected.length === selectableOrders.length) {
