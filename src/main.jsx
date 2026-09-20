@@ -2365,7 +2365,18 @@ const editInvoice = (id) => {
             </thead>
 
             <tbody>
-             {filteredInvoiceRows.map((row) => ( 
+          {filteredInvoiceRows.length === 0 && (
+  <tr>
+    <td colSpan="8" style={{ textAlign: "center", padding: "32px" }}>
+      {invoiceFilter === "waiting"
+        ? "송장 대기 주문이 없습니다."
+        : invoiceFilter === "ready"
+        ? "쿠팡에 등록 가능한 송장이 없습니다."
+        : "운송장 주문이 없습니다."}
+    </td>
+  </tr>
+)}
+              {filteredInvoiceRows.map((row) => ( 
                 <tr key={row.id}>
                  <td>
   <input
