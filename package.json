@@ -1,7 +1,7 @@
 {
-  "name": "sellerflow-step1-dashboard",
+  "name": "sellerflow-mvp-v2",
   "private": true,
-  "version": "1.1.0",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,8 @@
     "@vitejs/plugin-react": "latest",
     "vite": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "xlsx": "^0.18.5",
+    "jszip": "^3.10.1"
   }
 }
