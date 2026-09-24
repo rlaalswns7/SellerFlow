@@ -5,7 +5,7 @@ import JSZip from "jszip";
 import "./style.css";
 
 const STORAGE_PREFIX = "sellerflow_v2_";
-const DATA_VERSION = 4;
+const DATA_VERSION = 6;
 const nowIso = () => new Date().toISOString();
 const money = (value) => `₩${Number(value || 0).toLocaleString("ko-KR")}`;
 const uid = (prefix = "ID") => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -109,6 +109,8 @@ const defaultSuppliers = [
     name: "A농장",
     contact: "010-1234-5678",
     method: "카카오톡",
+    shareTarget: "A농장 오픈채팅",
+    orderShareMessage: "{도매처} 발주서입니다. 발주번호 {발주번호}, 총 {주문수}건입니다. 출고 후 송장 파일 회신 부탁드립니다.",
     orderDeadline: "17:00",
     invoiceDeadline: "19:00",
     orderColumns: "주문번호,주문일,수취인,상품명,옵션,수량,보내는사람,연락처,주소",
@@ -125,6 +127,8 @@ const defaultSuppliers = [
     name: "C농장",
     contact: "010-5678-1234",
     method: "카카오톡",
+    shareTarget: "C농장 오픈채팅",
+    orderShareMessage: "{도매처} 발주서입니다. 발주번호 {발주번호}, 총 {주문수}건입니다. 출고 후 송장 파일 회신 부탁드립니다.",
     orderDeadline: "16:30",
     invoiceDeadline: "18:30",
     orderColumns: "주문번호,수취인,상품명,옵션,수량,주소",
@@ -190,7 +194,7 @@ const defaultSettings = {
   sellerId: "", vendorId: "", wingStatus: "미연결", apiLastSyncAt: "", apiSuccessRate: 100, apiOutage: false,
   senderName: "", senderPhone: "", senderAddress: "",
   browserNotifications: false, notifyOrderImport: true, notifyInvoiceDeadline: true, notifyCsRisk: true, notifyPurchaseDelay: true, notifyInvoiceMatchFail: true, notifyRegisterDone: true,
-  currentRole: "관리자", systemMode: "테스트", retryLimit: 3, highValueThreshold: 100000, bulkQtyThreshold: 5,
+  currentRole: "관리자", systemMode: "테스트", theme: "system", retryLimit: 3, highValueThreshold: 100000, bulkQtyThreshold: 5,
   privacyMasking: true, dataRetentionDays: 180, autoRetentionCleanup: false, autoBackupMinutes: 15,
   dashboardCards: ["연결 필요","발주 대기","운송장 대기","쿠팡 등록 가능","CS 마감 임박","운영 위험"],
   dataVersion: DATA_VERSION,
@@ -537,7 +541,7 @@ function App() {
   useEffect(() => {
     setOrders(prev => prev.map(o => ({ phone:"", address:"", customerNote:"", supplierNote:"", internalMemo:"", hold:false, holdReason:"", favorite:false, retryCount:0, ...o })));
     setProducts(prev => prev.map(p => ({ alternateSupplier:"", automationMode:"자동", stockout:false, costHistory:[], stockoutHistory:[], ...p })));
-    setSuppliers(prev => prev.map(s => ({ minOrderQty:1, minOrderAmount:0, holidays:"", shipLeadDays:1, deliveryLeadDays:2, orderFileName:"{도매처}_{날짜}_발주서", orderSheetName:"발주서", invoiceMapOrderId:"주문번호", invoiceMapCarrier:"택배사", invoiceMapInvoice:"운송장번호", ...s })));
+    setSuppliers(prev => prev.map(s => ({ minOrderQty:1, minOrderAmount:0, holidays:"", shipLeadDays:1, deliveryLeadDays:2, orderFileName:"{도매처}_{날짜}_발주서", orderSheetName:"발주서", invoiceMapOrderId:"주문번호", invoiceMapCarrier:"택배사", invoiceMapInvoice:"운송장번호", shareTarget:"", orderShareMessage:"{도매처} 발주서입니다. 발주번호 {발주번호}, 총 {주문수}건입니다. 출고 후 송장 파일 회신 부탁드립니다.", ...s })));
     setSettings(prev => ({ ...defaultSettings, ...prev, dataVersion: DATA_VERSION }));
   }, []);
 
@@ -569,6 +573,26 @@ function App() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      const preference = settings.theme || "system";
+      const resolved = preference === "system" ? (media?.matches ? "dark" : "light") : preference;
+      root.dataset.theme = resolved;
+      root.dataset.themePreference = preference;
+    };
+    applyTheme();
+    media?.addEventListener?.("change", applyTheme);
+    return () => media?.removeEventListener?.("change", applyTheme);
+  }, [settings.theme]);
+
+  const cycleTheme = () => {
+    const current = settings.theme || "system";
+    const next = current === "system" ? "dark" : current === "dark" ? "light" : "system";
+    setSettings((prev) => ({ ...prev, theme: next }));
+  };
 
   const derivedNotifications = useMemo(() => {
     const items = [];
@@ -641,7 +665,7 @@ function App() {
     <div className="app">
       <aside>
         <div className="logo"><i>S</i><b>Seller<span>Flow</span></b></div>
-        <div className="workspace"><b>내 판매센터</b><small>● 운영형 MVP v4</small></div>
+        <div className="workspace"><b>내 판매센터</b><small>● 운영형 MVP v6</small></div>
         {menus.filter(([name]) => roleCanAccess(settings.currentRole || "관리자", name)).map(([name, icon]) => (
           <button key={name} className={page === name ? "active" : ""} onClick={() => openPage(name)}>
             <em>{icon}</em>{name}
@@ -655,6 +679,7 @@ function App() {
           <div className="headerTools">
             <span className={`modeBadge ${settings.apiOutage ? "danger" : ""}`}>{settings.apiOutage ? "API 장애모드" : settings.systemMode}</span>
             <input id="global-search" value={globalSearch} onChange={(e) => setGlobalSearch(e.target.value)} placeholder="주문·고객·전화·상품·도매처·송장 검색" />
+            <button className="themeToggle" onClick={cycleTheme} title={`테마: ${settings.theme === "dark" ? "다크" : settings.theme === "light" ? "라이트" : "시스템"}`}>{settings.theme === "dark" ? "🌙" : settings.theme === "light" ? "☀️" : "◐"}</button>
             <button className="secondary undoTop" onClick={undoLast} disabled={!undoStack.length}>↶ 되돌리기</button>
             <button className="bell" onClick={() => openPage("운영 센터")}>알림 {unreadCount}</button>
           </div>
@@ -811,6 +836,7 @@ function OrderPage({ orders, setOrders, products, setProducts, suppliers, invoic
 function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInvoices, purchaseBatches, setPurchaseBatches, settings, pushActivity, pushNotification }) {
   const [selected, setSelected] = useState([]);
   const [processing, setProcessing] = useState(false);
+  const [sharingKey, setSharingKey] = useState("");
   const eligible = orders.filter((o) => !o.marketing && !o.hold && o.supplier !== "미연결" && o.purchaseStatus === "발주대기");
 
   const toggle = (id) => setSelected((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -823,7 +849,6 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
     if (!supplier) problems.push("도매처 데이터 없음");
     else {
       if (!supplier.active) problems.push("중지된 도매처");
-      // 최소 발주수량/금액은 선택된 도매처 묶음 전체를 기준으로 아래에서 검증합니다.
       const holidayList=String(supplier.holidays||"").split(",").map(x=>x.trim()).filter(Boolean);
       const today=new Date().toISOString().slice(0,10); if(holidayList.includes(today)) problems.push("도매처 휴무일");
     }
@@ -850,26 +875,97 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
     const columns = String(supplier?.orderColumns || "주문번호,주문일,수취인,상품명,옵션,수량").split(",").map((x) => x.trim()).filter(Boolean);
     return items.map((order) => {
       const source = {
-        주문번호: order.id,
-        주문일: order.date,
-        수취인: order.customer,
-        고객명: order.customer,
-        상품명: order.product,
-        옵션: order.option,
-        수량: order.qty,
-        판매금액: order.saleAmount,
-        연락처: order.phone || "",
-        수취인연락처: order.phone || "",
-        주소: order.address || "",
-        배송주소: order.address || "",
-        보내는사람: settings.senderName || "",
-        보내는사람연락처: settings.senderPhone || "",
-        보내는사람주소: settings.senderAddress || "",
+        주문번호: order.id, 주문일: order.date, 수취인: order.customer, 고객명: order.customer,
+        상품명: order.product, 옵션: order.option, 수량: order.qty, 판매금액: order.saleAmount,
+        연락처: order.phone || "", 수취인연락처: order.phone || "", 주소: order.address || "", 배송주소: order.address || "",
+        보내는사람: settings.senderName || "", 보내는사람연락처: settings.senderPhone || "", 보내는사람주소: settings.senderAddress || "",
       };
-      const row = {};
-      columns.forEach((col) => { row[col] = source[col] ?? ""; });
-      return row;
+      const row = {}; columns.forEach((col) => { row[col] = source[col] ?? ""; }); return row;
     });
+  };
+
+  const makeSupplierFile = (supplierName, items) => {
+    const rows = buildRowsForSupplier(supplierName, items);
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    const supplierData = suppliers.find((s) => s.name === supplierName);
+    XLSX.utils.book_append_sheet(wb, ws, supplierData?.orderSheetName || "발주서");
+    const array = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+    const base = (supplierData?.orderFileName || "{도매처}_{날짜}_발주서").replace("{도매처}", supplierName).replace("{날짜}", new Date().toISOString().slice(0, 10));
+    const filename = `${base}.xlsx`;
+    const blob = new Blob([array], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const file = new File([blob], filename, { type: blob.type });
+    return { array, blob, file, filename };
+  };
+
+  const batchSupplierOrders = (batch, supplierName) => orders.filter((o) => batch.orderIds.includes(o.id) && o.supplier === supplierName);
+  const deliveryInfo = (batch, supplierName) => batch.deliveries?.[supplierName] || { status: "미전송", sentAt: "", method: suppliers.find((s) => s.name === supplierName)?.method || "수동" };
+
+  const renderShareMessage = (batch, supplierName, count) => {
+    const supplier = suppliers.find((s) => s.name === supplierName);
+    const template = supplier?.orderShareMessage || "{도매처} 발주서입니다. 발주번호 {발주번호}, 총 {주문수}건입니다. 출고 후 송장 파일 회신 부탁드립니다.";
+    return template.replaceAll("{도매처}", supplierName).replaceAll("{발주번호}", batch.id).replaceAll("{주문수}", String(count));
+  };
+
+  const markDelivery = (batchId, supplierName, status, extra = {}) => {
+    setPurchaseBatches((prev) => prev.map((batch) => batch.id === batchId ? {
+      ...batch,
+      deliveries: {
+        ...(batch.deliveries || {}),
+        [supplierName]: { ...deliveryInfo(batch, supplierName), status, ...extra },
+      },
+    } : batch));
+  };
+
+  const copyShareMessage = async (batch, supplierName) => {
+    const items = batchSupplierOrders(batch, supplierName);
+    const text = renderShareMessage(batch, supplierName, items.length);
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("발주 메시지를 복사했습니다.");
+    } catch {
+      window.prompt("아래 발주 메시지를 복사하세요.", text);
+    }
+  };
+
+  const downloadSupplierFile = (batch, supplierName) => {
+    const items = batchSupplierOrders(batch, supplierName);
+    if (!items.length) return alert("해당 도매처 주문이 없습니다.");
+    const { blob, filename } = makeSupplierFile(supplierName, items);
+    saveBlob(blob, filename);
+    pushActivity("도매처 발주서 다운로드", `${batch.id} · ${supplierName} · ${items.length}건`);
+  };
+
+  const shareSupplierFile = async (batch, supplierName) => {
+    const key = `${batch.id}-${supplierName}`;
+    if (sharingKey) return;
+    const items = batchSupplierOrders(batch, supplierName);
+    if (!items.length) return alert("해당 도매처 주문이 없습니다.");
+    const supplier = suppliers.find((s) => s.name === supplierName);
+    const { file, blob, filename } = makeSupplierFile(supplierName, items);
+    const text = renderShareMessage(batch, supplierName, items.length);
+    setSharingKey(key);
+    try {
+      const shareData = { title: `${supplierName} 발주서`, text, files: [file] };
+      const canShareFiles = Boolean(navigator.share) && (!navigator.canShare || navigator.canShare(shareData));
+      if (canShareFiles) {
+        await navigator.share(shareData);
+        markDelivery(batch.id, supplierName, "공유완료", { sentAt: nowIso(), method: supplier?.method || "공유" });
+        pushActivity("도매처 발주 공유", `${batch.id} · ${supplierName} · ${items.length}건 공유 완료`);
+      } else {
+        saveBlob(blob, filename);
+        try { await navigator.clipboard.writeText(text); } catch {}
+        alert("이 브라우저는 파일 공유창을 지원하지 않아 도매처 전용 XLSX를 다운로드했습니다. 발주 메시지도 가능한 경우 클립보드에 복사했습니다.");
+      }
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        console.error(error);
+        saveBlob(blob, filename);
+        alert("공유창을 열지 못해 도매처 전용 발주서를 다운로드했습니다.");
+      }
+    } finally {
+      setSharingKey("");
+    }
   };
 
   const previewPurchase = () => {
@@ -893,16 +989,9 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
     setProcessing(true);
     const grouped = targets.reduce((acc, o) => ((acc[o.supplier] ||= []).push(o), acc), {});
     const zip = new JSZip();
-
-    Object.entries(grouped).forEach(([supplier, items]) => {
-      const rows = buildRowsForSupplier(supplier, items);
-      const ws = XLSX.utils.json_to_sheet(rows);
-      const wb = XLSX.utils.book_new();
-      const supplierData = suppliers.find(s=>s.name===supplier);
-      XLSX.utils.book_append_sheet(wb, ws, supplierData?.orderSheetName || "발주서");
-      const array = XLSX.write(wb, { type: "array", bookType: "xlsx" });
-      const base=(supplierData?.orderFileName||"{도매처}_{날짜}_발주서").replace("{도매처}",supplier).replace("{날짜}",new Date().toISOString().slice(0,10));
-      zip.file(`${base}.xlsx`, array);
+    Object.entries(grouped).forEach(([supplierName, items]) => {
+      const { array, filename } = makeSupplierFile(supplierName, items);
+      zip.file(filename, array);
     });
 
     const zipBlob = await zip.generateAsync({ type: "blob" });
@@ -912,14 +1001,17 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
     setOrders((prev) => prev.map((o) => selected.includes(o.id) ? { ...o, purchaseStatus: "발주완료", invoiceStatus: "송장대기", purchaseBatchId: batchId } : o));
     setInvoices((prev) => {
       const next = [...prev];
-      targets.forEach((o) => {
-        if (!next.some((r) => r.id === o.id)) next.push({ id: o.id, product: o.product, supplier: o.supplier, carrier: "", invoice: "", status: "송장대기", source: "도매처", updatedAt: nowIso() });
-      });
+      targets.forEach((o) => { if (!next.some((r) => r.id === o.id)) next.push({ id: o.id, product: o.product, supplier: o.supplier, carrier: "", invoice: "", status: "송장대기", source: "도매처", updatedAt: nowIso() }); });
       return next;
     });
-    setPurchaseBatches((prev) => [{ id: batchId, createdAt: nowIso(), orderIds: targets.map((o) => o.id), suppliers: Object.keys(grouped), status: "발주완료" }, ...prev]);
+    const deliveries = Object.keys(grouped).reduce((acc, supplierName) => {
+      const supplier = suppliers.find((s) => s.name === supplierName);
+      acc[supplierName] = { status: "미전송", sentAt: "", method: supplier?.method || "수동" };
+      return acc;
+    }, {});
+    setPurchaseBatches((prev) => [{ id: batchId, createdAt: nowIso(), orderIds: targets.map((o) => o.id), suppliers: Object.keys(grouped), status: "발주완료", deliveries }, ...prev]);
     pushActivity("발주서 생성", `${targets.length}건 · ${Object.keys(grouped).length}개 도매처 발주서 ZIP 생성`, { batchId });
-    pushNotification("발주 완료", `${targets.length}건이 발주완료로 전환됐습니다.`, "운송장 관리");
+    pushNotification("발주 완료", `${targets.length}건 발주서가 생성됐습니다. 도매처 전송센터에서 각 도매처 파일만 공유하세요.`, "발주 관리");
     setSelected([]);
     setProcessing(false);
   };
@@ -934,24 +1026,24 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
     pushActivity("발주 묶음 취소", `${batch.id} · ${batch.orderIds.length}건 복구`);
   };
 
+  const deliveryRows = purchaseBatches.filter((b) => b.status === "발주완료").slice(0, 6).flatMap((batch) => (batch.suppliers || []).map((supplierName) => ({ batch, supplierName, items: batchSupplierOrders(batch, supplierName), info: deliveryInfo(batch, supplierName), supplier: suppliers.find((s) => s.name === supplierName) })));
+
   return (
     <>
-      <PageHead title="발주 관리" description="사전 검증 → 도매처별 XLSX 생성 → ZIP 다운로드 → 상태 전환을 한 번에 처리합니다." actions={<><button className="secondary" onClick={previewPurchase}>발주 전 미리보기</button><button className="primary" disabled={processing} onClick={createPurchaseZip}>{processing?"생성 중...":`검증 후 발주서 생성 (${selected.length})`}</button></>} />
+      <PageHead title="발주 관리" description="도매처별 XLSX 생성 → ZIP 보관 → 각 도매처 전용 파일만 공유 → 전송상태 추적까지 한 번에 처리합니다." actions={<><button className="secondary" onClick={previewPurchase}>발주 전 미리보기</button><button className="primary" disabled={processing} onClick={createPurchaseZip}>{processing?"생성 중...":`검증 후 발주서 생성 (${selected.length})`}</button></>} />
 
-      <div className={`preflight ${selectedIssues.length ? "danger" : "ok"}`}>
-        <div><b>발주 사전 검증</b><span>선택 {selectedOrders.length}건</span></div>
-        <strong>{selectedOrders.length === 0 ? "주문 선택 필요" : selectedIssues.length ? `${selectedIssues.length}개 문제 발견` : "검증 통과"}</strong>
-      </div>
+      <div className={`preflight ${selectedIssues.length ? "danger" : "ok"}`}><div><b>발주 사전 검증</b><span>선택 {selectedOrders.length}건</span></div><strong>{selectedOrders.length === 0 ? "주문 선택 필요" : selectedIssues.length ? `${selectedIssues.length}개 문제 발견` : "검증 통과"}</strong></div>
 
-      <div className="panel">
-        <label className="checkLine"><input type="checkbox" checked={eligible.length > 0 && selected.length === eligible.length} onChange={toggleAll} /> 전체 선택 · 발주 가능한 주문만</label>
-        <div className="table"><table><thead><tr><th>선택</th><th>주문번호</th><th>상품</th><th>도매처</th><th>수량</th><th>검증</th><th>상태</th></tr></thead><tbody>
-          {eligible.length === 0 ? <tr><td colSpan="7">발주 대기 주문이 없습니다.</td></tr> : eligible.map((o) => { const issues = validate(o); return <tr key={o.id}><td><input type="checkbox" checked={selected.includes(o.id)} onChange={() => toggle(o.id)} /></td><td><b>{o.id}</b></td><td>{o.product}<small className="subText">{o.option}</small></td><td>{o.supplier}</td><td>{o.qty}</td><td>{issues.length ? <span className="severity danger">{issues.join(" · ")}</span> : <span className="okText">정상</span>}</td><td><Tag>{o.purchaseStatus}</Tag></td></tr>; })}
-        </tbody></table></div>
-      </div>
-      <div className="panel"><div className="panelHead"><div><h2>최근 발주 묶음</h2><p>송장 진행 전까지만 묶음 취소 가능</p></div></div><div className="table"><table><thead><tr><th>발주번호</th><th>시간</th><th>도매처</th><th>주문수</th><th>상태</th><th>작업</th></tr></thead><tbody>
-        {purchaseBatches.length === 0 ? <tr><td colSpan="6">발주 기록이 없습니다.</td></tr> : purchaseBatches.slice(0, 10).map((b) => <tr key={b.id}><td><b>{b.id}</b></td><td>{new Date(b.createdAt).toLocaleString("ko-KR")}</td><td>{b.suppliers.join(", ")}</td><td>{b.orderIds.length}</td><td><Tag>{b.status}</Tag></td><td><button className="secondary" disabled={b.status !== "발주완료"} onClick={() => cancelBatch(b)}>주문서 취소</button></td></tr>)}
+      <div className="panel"><label className="checkLine"><input type="checkbox" checked={eligible.length > 0 && selected.length === eligible.length} onChange={toggleAll} /> 전체 선택 · 발주 가능한 주문만</label><div className="table"><table><thead><tr><th>선택</th><th>주문번호</th><th>상품</th><th>도매처</th><th>수량</th><th>검증</th><th>상태</th></tr></thead><tbody>
+        {eligible.length === 0 ? <tr><td colSpan="7">발주 대기 주문이 없습니다.</td></tr> : eligible.map((o) => { const issues = validate(o); return <tr key={o.id}><td><input type="checkbox" checked={selected.includes(o.id)} onChange={() => toggle(o.id)} /></td><td><b>{o.id}</b></td><td>{o.product}<small className="subText">{o.option}</small></td><td>{o.supplier}</td><td>{o.qty}</td><td>{issues.length ? <span className="severity danger">{issues.join(" · ")}</span> : <span className="okText">정상</span>}</td><td><Tag>{o.purchaseStatus}</Tag></td></tr>; })}
       </tbody></table></div></div>
+
+      <div className="panel supplierDeliveryPanel"><div className="panelHead"><div><h2>도매처 전송센터</h2><p>ZIP 전체가 아니라 각 도매처의 전용 XLSX만 공유합니다. iPad/모바일에서는 공유 버튼으로 카카오톡 공유창을 바로 열 수 있습니다.</p></div></div>
+        {deliveryRows.length === 0 ? <div className="emptyLine">발주서를 생성하면 도매처별 전송 작업이 여기에 나타납니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>주문수</th><th>전달방식</th><th>대상</th><th>전송상태</th><th>작업</th></tr></thead><tbody>{deliveryRows.map(({batch,supplierName,items,info,supplier}) => { const key=`${batch.id}-${supplierName}`; return <tr key={key}><td><b>{batch.id}</b><small className="subText">{new Date(batch.createdAt).toLocaleString("ko-KR")}</small></td><td><b>{supplierName}</b></td><td>{items.length}건</td><td>{supplier?.method || info.method || "수동"}</td><td>{supplier?.shareTarget || "미설정"}</td><td><span className={`deliveryStatus ${info.status === "공유완료" ? "sent" : "pending"}`}>{info.status || "미전송"}</span>{info.sentAt && <small className="subText">{new Date(info.sentAt).toLocaleString("ko-KR")}</small>}</td><td className="actions"><button className="primary" disabled={sharingKey===key} onClick={()=>shareSupplierFile(batch,supplierName)}>{sharingKey===key?"공유 중...":info.status==="공유완료"?"다시 공유":"공유"}</button><button className="secondary" onClick={()=>downloadSupplierFile(batch,supplierName)}>파일</button><button className="secondary" onClick={()=>copyShareMessage(batch,supplierName)}>메시지</button>{info.status!=="공유완료"&&<button className="secondary" onClick={()=>markDelivery(batch.id,supplierName,"공유완료",{sentAt:nowIso(),method:supplier?.method||"수동"})}>완료표시</button>}</td></tr>; })}</tbody></table></div>}
+        <p className="securityNote">개인정보 보호를 위해 도매처에는 자기 주문이 들어간 XLSX만 공유하세요. 전체 ZIP을 카카오톡 방에 보내는 기능은 의도적으로 제공하지 않습니다.</p>
+      </div>
+
+      <div className="panel"><div className="panelHead"><div><h2>최근 발주 묶음</h2><p>송장 진행 전까지만 묶음 취소 가능</p></div></div><div className="table"><table><thead><tr><th>발주번호</th><th>시간</th><th>도매처</th><th>주문수</th><th>상태</th><th>작업</th></tr></thead><tbody>{purchaseBatches.length === 0 ? <tr><td colSpan="6">발주 기록이 없습니다.</td></tr> : purchaseBatches.slice(0, 10).map((b) => <tr key={b.id}><td><b>{b.id}</b></td><td>{new Date(b.createdAt).toLocaleString("ko-KR")}</td><td>{b.suppliers.join(", ")}</td><td>{b.orderIds.length}</td><td><Tag>{b.status}</Tag></td><td><button className="secondary" disabled={b.status !== "발주완료"} onClick={() => cancelBatch(b)}>주문서 취소</button></td></tr>)}</tbody></table></div></div>
     </>
   );
 }
@@ -961,6 +1053,8 @@ function InvoicePage({ orders, setOrders, invoices, setInvoices, suppliers, invo
   const [processing, setProcessing] = useState(false);
   const [supplierFilter, setSupplierFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [inboxResults, setInboxResults] = useState([]);
+  const [lastInboxAt, setLastInboxAt] = useState("");
   const fileRef = useRef(null);
   const q = (search || globalSearch).trim().toLowerCase();
 
@@ -1012,9 +1106,7 @@ function InvoicePage({ orders, setOrders, invoices, setInvoices, suppliers, invo
     if (invalid.length) return alert(`등록 전 검증 실패 ${invalid.length}건\n\n${invalid.slice(0, 8).map((r) => `${r.id}: ${rowIssues(r).join(", ")}`).join("\n")}`);
     const actual = targets.filter((r) => r.carrier && r.invoice && r.status !== "등록완료(테스트)");
     if (!actual.length) return alert("등록 가능한 송장이 없습니다.");
-    if (!window.confirm(`${actual.length}건을 ${settings.systemMode === "테스트" ? "등록완료(테스트)" : "실운영 준비"} 상태로 전환할까요?
-
-※ 현재 파일에는 실제 WING API 전송 코드가 없어 실운영 모드도 외부 전송은 하지 않습니다.`)) return;
+    if (!window.confirm(`${actual.length}건을 ${settings.systemMode === "테스트" ? "등록완료(테스트)" : "실운영 준비"} 상태로 전환할까요?\n\n※ 현재 파일에는 실제 WING API 전송 코드가 없어 외부 전송은 하지 않습니다.`)) return;
     setProcessing(true);
     setInvoices((prev) => prev.map((r) => actual.some((t) => t.id === r.id) ? { ...r, status: "등록완료(테스트)", updatedAt: nowIso() } : r));
     setOrders((prev) => prev.map((o) => actual.some((t) => t.id === o.id) ? { ...o, invoiceStatus: "등록완료(테스트)" } : o));
@@ -1035,52 +1127,117 @@ function InvoicePage({ orders, setOrders, invoices, setInvoices, suppliers, invo
 
   const downloadTemplate = () => {
     const ws = XLSX.utils.json_to_sheet(rows.map((r) => ({ 주문번호: r.id, 택배사: r.carrier || "", 운송장번호: r.invoice || "" })));
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "송장입력"); XLSX.writeFile(wb, "SellerFlow_송장입력_템플릿.xlsx");
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "송장입력");
+    XLSX.writeFile(wb, "SellerFlow_송장입력_템플릿.xlsx");
   };
 
-  const uploadInvoices = async (file) => {
-    if (!file) return;
-    const buffer = await file.arrayBuffer();
-    const imported = sheetRowsFromArrayBuffer(buffer).map((row) => ({
-      id: String(findCell(row, ["주문번호", "orderid", "주문ID"], 0)).trim(),
-      carrier: String(findCell(row, ["택배사", "carrier"], 1)).trim(),
-      invoice: String(findCell(row, ["운송장번호", "송장번호", "invoice"], 2)).trim(),
-    })).filter((r) => r.id);
+  const supplierFromFileName = (name) => {
+    const normalized = normalizeHeader(name);
+    return suppliers.find((supplier) => normalized.includes(normalizeHeader(supplier.name)))?.name || "";
+  };
 
-    const failures = [];
-    const invoiceCounts = imported.reduce((acc, r) => {
-      if (r.invoice) acc[r.invoice] = (acc[r.invoice] || 0) + 1;
-      return acc;
-    }, {});
+  const parseInboxFile = async (file) => {
+    const rawRows = sheetRowsFromArrayBuffer(await file.arrayBuffer());
+    const fileSupplier = supplierFromFileName(file.name);
+    const supplierData = suppliers.find((s) => s.name === fileSupplier);
+    const orderCandidates = [supplierData?.invoiceMapOrderId, ...suppliers.map((s) => s.invoiceMapOrderId), "주문번호", "orderid", "주문ID", "주문코드", "주문번호(쿠팡)"].filter(Boolean);
+    const carrierCandidates = [supplierData?.invoiceMapCarrier, ...suppliers.map((s) => s.invoiceMapCarrier), "택배사", "택배사명", "carrier", "배송사"].filter(Boolean);
+    const invoiceCandidates = [supplierData?.invoiceMapInvoice, ...suppliers.map((s) => s.invoiceMapInvoice), "운송장번호", "송장번호", "invoice", "trackingnumber", "운송장"].filter(Boolean);
 
-    const valid = imported.filter((r) => {
-      if (!invoices.some((x) => x.id === r.id)) { failures.push(`${r.id}: 주문번호 미매칭`); return false; }
-      if (!r.carrier || !r.invoice) { failures.push(`${r.id}: 택배사/송장번호 누락`); return false; }
-      if (invoiceCounts[r.invoice] > 1) { failures.push(`${r.id}: 업로드 파일 내 중복 송장`); return false; }
-      if (duplicateInvoice(r.invoice, r.id)) { failures.push(`${r.id}: 기존 데이터와 중복 송장`); return false; }
-      return true;
+    const entries = rawRows.map((row, index) => ({
+      fileName: file.name,
+      rowNo: index + 2,
+      id: String(findCell(row, orderCandidates, 0)).trim(),
+      carrier: String(findCell(row, carrierCandidates, 1)).trim(),
+      invoice: String(findCell(row, invoiceCandidates, 2)).trim(),
+    })).filter((r) => r.id || r.invoice || r.carrier);
+
+    const supplierCounts = {};
+    entries.forEach((entry) => {
+      const existing = invoices.find((x) => x.id === entry.id);
+      if (existing?.supplier) supplierCounts[existing.supplier] = (supplierCounts[existing.supplier] || 0) + 1;
     });
+    const majoritySupplier = Object.entries(supplierCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+    return { fileName: file.name, detectedSupplier: fileSupplier || majoritySupplier || "자동판별 실패", entries };
+  };
 
-    const validMap = new Map(valid.map((r) => [r.id, r]));
-    setInvoices((prev) => prev.map((row) => {
-      const found = validMap.get(row.id);
-      return found ? { ...row, carrier: found.carrier, invoice: found.invoice, status: "등록대기", updatedAt: nowIso() } : row;
-    }));
-    setOrders((prev) => prev.map((o) => validMap.has(o.id) ? { ...o, invoiceStatus: "쿠팡 등록 가능" } : o));
-    if (failures.length) pushNotification("송장 매칭 점검", `${failures.length}건을 안전장치로 제외했습니다.`, "운송장 관리", "danger");
-    pushActivity("송장 파일 업로드", `${valid.length}건 검증 통과 / ${failures.length}건 제외`);
-    alert(`송장 업로드 결과\n검증 통과 ${valid.length}건\n제외 ${failures.length}건${failures.length ? `\n\n${failures.slice(0, 10).join("\n")}` : ""}`);
-    if (fileRef.current) fileRef.current.value = "";
+  const uploadInvoiceFiles = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length || processing) return;
+    setProcessing(true);
+    try {
+      const parsedFiles = [];
+      for (const file of files) parsedFiles.push(await parseInboxFile(file));
+      const all = parsedFiles.flatMap((file) => file.entries.map((entry) => ({ ...entry, detectedSupplier: file.detectedSupplier })));
+      const uploadInvoiceCounts = {};
+      const uploadOrderCounts = {};
+      all.forEach((r) => {
+        if (r.invoice) uploadInvoiceCounts[r.invoice] = (uploadInvoiceCounts[r.invoice] || 0) + 1;
+        if (r.id) uploadOrderCounts[r.id] = (uploadOrderCounts[r.id] || 0) + 1;
+      });
+
+      const resultByFile = new Map(parsedFiles.map((file) => [file.fileName, { fileName: file.fileName, supplier: file.detectedSupplier, total: file.entries.length, matched: 0, failed: 0, errors: [] }]));
+      const valid = [];
+      all.forEach((r) => {
+        const result = resultByFile.get(r.fileName);
+        const target = invoices.find((x) => x.id === r.id);
+        let error = "";
+        if (!r.id) error = "주문번호 없음";
+        else if (!target) error = "SellerFlow 주문과 미매칭";
+        else if (!r.carrier || !r.invoice) error = "택배사/송장번호 누락";
+        else if (uploadOrderCounts[r.id] > 1) error = "여러 파일에 같은 주문번호 중복";
+        else if (uploadInvoiceCounts[r.invoice] > 1) error = "업로드 파일 사이 송장번호 중복";
+        else if (duplicateInvoice(r.invoice, r.id)) error = "기존 데이터와 송장번호 중복";
+        else if (r.detectedSupplier !== "자동판별 실패" && target.supplier && target.supplier !== r.detectedSupplier) error = `도매처 불일치(${target.supplier})`;
+
+        if (error) {
+          result.failed += 1;
+          if (result.errors.length < 6) result.errors.push(`${r.rowNo}행 ${r.id || "-"}: ${error}`);
+        } else {
+          result.matched += 1;
+          valid.push(r);
+        }
+      });
+
+      const validMap = new Map(valid.map((r) => [r.id, r]));
+      setInvoices((prev) => prev.map((row) => {
+        const found = validMap.get(row.id);
+        return found ? { ...row, carrier: found.carrier, invoice: found.invoice, status: "등록대기", updatedAt: nowIso() } : row;
+      }));
+      setOrders((prev) => prev.map((o) => validMap.has(o.id) ? { ...o, invoiceStatus: "쿠팡 등록 가능" } : o));
+      setSelected(valid.map((r) => r.id));
+      setInboxResults(Array.from(resultByFile.values()));
+      setLastInboxAt(nowIso());
+
+      const failedCount = Array.from(resultByFile.values()).reduce((sum, item) => sum + item.failed, 0);
+      if (failedCount) pushNotification("송장 수신함 점검", `${failedCount}건은 오류함에서 확인이 필요합니다.`, "운송장 관리", "danger");
+      pushActivity("송장 수신함 자동 매칭", `${files.length}개 파일 · ${valid.length}건 자동 매칭 / ${failedCount}건 제외`);
+      alert(`송장 수신함 처리 완료\n파일 ${files.length}개\n자동 매칭 ${valid.length}건\n확인 필요 ${failedCount}건\n\n정상 건은 자동으로 선택됐습니다.`);
+    } catch (error) {
+      console.error(error);
+      alert("송장 파일을 읽는 중 오류가 발생했습니다. XLSX/XLS/CSV 파일인지 확인해주세요.");
+    } finally {
+      setProcessing(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
   };
 
   return (
     <>
-      <PageHead title="운송장 관리" description="도매처별 필터·Excel 매칭·중복송장 검증·일괄등록을 처리합니다." actions={<><button className="secondary" onClick={downloadTemplate}>송장 템플릿 다운로드</button><label className="primary fileLabel">송장 파일 불러오기<input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={(e) => uploadInvoices(e.target.files?.[0])} /></label><button className="primary" disabled={!selected.length} onClick={() => registerRows(invoices.filter((r) => selected.includes(r.id)))}>검증 후 일괄등록 ({selected.length})</button></>} />
+      <PageHead title="운송장 관리" description="여러 도매처 송장 파일을 한 번에 넣으면 도매처·컬럼·주문번호를 자동 판별해 정상 건만 매칭합니다." actions={<><button className="secondary" onClick={downloadTemplate}>송장 템플릿</button><label className="primary fileLabel">{processing ? "처리 중..." : "송장 파일 여러 개 불러오기"}<input ref={fileRef} type="file" multiple accept=".xlsx,.xls,.csv" disabled={processing} onChange={(e) => uploadInvoiceFiles(e.target.files)} /></label><button className="primary" disabled={!selected.length || processing} onClick={() => registerRows(invoices.filter((r) => selected.includes(r.id)))}>검증 후 일괄등록 ({selected.length})</button></>} />
+
+      <div className="panel invoiceInbox">
+        <div className="panelHead"><div><h2>송장 수신함</h2><p>카톡·메일로 받은 도매처 송장 파일을 여러 개 선택하면 한 번에 처리합니다. 수기 입력은 예외 수정용입니다.</p></div>{lastInboxAt && <span className="muted">최근 처리 {new Date(lastInboxAt).toLocaleString("ko-KR")}</span>}</div>
+        {inboxResults.length === 0 ? <div className="inboxEmpty">여러 도매처의 XLSX/XLS/CSV를 한꺼번에 선택하세요.<br/><small>파일명 또는 주문번호를 이용해 도매처를 판별하고, 도매처별 저장 컬럼명도 함께 탐색합니다.</small></div> : <div className="inboxGrid">{inboxResults.map((result) => <div className={`inboxCard ${result.failed ? "warning" : "ok"}`} key={result.fileName}><b>{result.fileName}</b><span>도매처 · {result.supplier}</span><div><strong>{result.matched}</strong> 자동매칭 <em>{result.failed} 확인필요</em></div>{result.errors.length > 0 && <ul>{result.errors.map((error) => <li key={error}>{error}</li>)}</ul>}</div>)}</div>}
+        <p className="securityNote">정상 매칭 건은 자동으로 ‘쿠팡 등록 가능’으로 전환되고 일괄등록 대상으로 선택됩니다. 실제 WING API 연결 전에는 외부로 전송되지 않습니다.</p>
+      </div>
+
       <div className="panel filterBar"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="주문번호·상품·택배사·송장번호 검색" /><select value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)}><option value="all">전체 도매처</option>{suppliers.filter((s) => s.active).map((s) => <option key={s.id}>{s.name}</option>)}</select></div>
       <div className="panel"><div className="table"><table><thead><tr><th><input type="checkbox" checked={selectable.length > 0 && selected.length === selectable.length} onChange={toggleAll} /></th><th>주문번호</th><th>상품</th><th>도매처</th><th>택배사</th><th>운송장번호</th><th>검증</th><th>상태</th><th>관리</th></tr></thead><tbody>
         {rows.length === 0 ? <tr><td colSpan="9">조건에 맞는 운송장 주문이 없습니다.</td></tr> : rows.map((row) => { const issues = rowIssues(row); return <tr key={row.id}><td><input type="checkbox" disabled={!row.carrier || !row.invoice || row.status === "등록완료(테스트)" || issues.length > 0} checked={selected.includes(row.id)} onChange={() => toggle(row.id)} /></td><td><b>{row.id}</b><small className="subText">{row.source}</small></td><td>{row.product}</td><td>{row.supplier}</td><td>{row.carrier || "-"}</td><td>{row.invoice || "-"}</td><td>{issues.length ? <span className="severity danger">{issues.join(" · ")}</span> : <span className="okText">정상</span>}</td><td><Tag>{row.status}</Tag></td><td className="actions">{row.status === "등록완료(테스트)" ? <button className="secondary" onClick={() => cancelRegister(row)}>등록 취소</button> : <button className="secondary" disabled={!row.carrier || !row.invoice || issues.length > 0} onClick={() => registerRows([row])}>쿠팡 등록</button>}<button className="secondary" onClick={() => edit(row)} disabled={row.status === "등록완료(테스트)"}>수정</button></td></tr>; })}
       </tbody></table></div></div>
-      <div className="panel"><div className="panelHead"><div><h2>운송장 처리 로그</h2><p>중복·실패·등록·취소 기록</p></div><button className="secondary" onClick={() => setInvoiceLogs([])}>로그 비우기</button></div><LogTable rows={invoiceLogs} /></div>
+      <div className="panel"><div className="panelHead"><div><h2>운송장 처리 로그</h2><p>자동매칭·중복·실패·등록·취소 기록</p></div><button className="secondary" onClick={() => setInvoiceLogs([])}>로그 비우기</button></div><LogTable rows={invoiceLogs} /></div>
     </>
   );
 }
@@ -1155,13 +1312,13 @@ function MarketingPage({ orders, setOrders, invoices, setInvoices, marketingLogs
 }
 
 function SupplierPage({ suppliers, setSuppliers, products }) {
-  const emptyForm={name:"",contact:"",method:"카카오톡",orderDeadline:"17:00",invoiceDeadline:"19:00",orderColumns:"주문번호,주문일,수취인,상품명,옵션,수량,주소",invoiceColumns:"주문번호,택배사,운송장번호",defectAction:"환불",wrongAction:"재배송",damageAction:"재배송",returnShippingPayer:"도매처",responseDeadlineHours:24,active:true,minOrderQty:1,minOrderAmount:0,holidays:"",shipLeadDays:1,deliveryLeadDays:2,orderFileName:"{도매처}_{날짜}_발주서",orderSheetName:"발주서",invoiceMapOrderId:"주문번호",invoiceMapCarrier:"택배사",invoiceMapInvoice:"운송장번호"};
+  const emptyForm={name:"",contact:"",method:"카카오톡",shareTarget:"",orderShareMessage:"{도매처} 발주서입니다. 발주번호 {발주번호}, 총 {주문수}건입니다. 출고 후 송장 파일 회신 부탁드립니다.",orderDeadline:"17:00",invoiceDeadline:"19:00",orderColumns:"주문번호,주문일,수취인,상품명,옵션,수량,주소",invoiceColumns:"주문번호,택배사,운송장번호",defectAction:"환불",wrongAction:"재배송",damageAction:"재배송",returnShippingPayer:"도매처",responseDeadlineHours:24,active:true,minOrderQty:1,minOrderAmount:0,holidays:"",shipLeadDays:1,deliveryLeadDays:2,orderFileName:"{도매처}_{날짜}_발주서",orderSheetName:"발주서",invoiceMapOrderId:"주문번호",invoiceMapCarrier:"택배사",invoiceMapInvoice:"운송장번호"};
   const [form,setForm]=useState(emptyForm); const [editingId,setEditingId]=useState(null); const [showForm,setShowForm]=useState(false);
   const save=()=>{if(!form.name.trim())return alert("도매처명 입력"); if(editingId)setSuppliers(p=>p.map(s=>s.id===editingId?{...s,...form,name:form.name.trim()}:s));else setSuppliers(p=>[...p,{...form,id:Date.now(),name:form.name.trim()}]);setForm(emptyForm);setEditingId(null);setShowForm(false)};
   const edit=s=>{setForm({...emptyForm,...s});setEditingId(s.id);setShowForm(true);window.scrollTo({top:0,behavior:"smooth"})};
-  return <><PageHead title="도매처 관리" description="마감·휴무·최소발주·예상 배송·발주/송장 양식·CS 규정을 도매처별로 저장합니다." actions={<button className="primary" onClick={()=>{setForm(emptyForm);setEditingId(null);setShowForm(true)}}>+ 도매처 추가</button>}/>
-  {showForm&&<div className="panel"><h2>{editingId?"도매처 수정":"도매처 추가"}</h2><div className="formGrid"><Field label="도매처명"><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></Field><Field label="연락처"><input value={form.contact} onChange={e=>setForm({...form,contact:e.target.value})}/></Field><Field label="발주 방식"><select value={form.method} onChange={e=>setForm({...form,method:e.target.value})}><option>카카오톡</option><option>문자</option><option>이메일</option><option>기타</option></select></Field><Field label="발주 마감"><input type="time" value={form.orderDeadline} onChange={e=>setForm({...form,orderDeadline:e.target.value})}/></Field><Field label="송장 마감"><input type="time" value={form.invoiceDeadline} onChange={e=>setForm({...form,invoiceDeadline:e.target.value})}/></Field><Field label="회신 제한(시간)"><input type="number" value={form.responseDeadlineHours} onChange={e=>setForm({...form,responseDeadlineHours:Number(e.target.value)})}/></Field><Field label="최소 발주 수량"><input type="number" min="1" value={form.minOrderQty} onChange={e=>setForm({...form,minOrderQty:Number(e.target.value)})}/></Field><Field label="최소 발주 금액"><input type="number" min="0" value={form.minOrderAmount} onChange={e=>setForm({...form,minOrderAmount:Number(e.target.value)})}/></Field><Field label="휴무일(YYYY-MM-DD, 쉼표구분)"><input value={form.holidays||""} onChange={e=>setForm({...form,holidays:e.target.value})}/></Field><Field label="출고 리드타임(일)"><input type="number" min="0" value={form.shipLeadDays} onChange={e=>setForm({...form,shipLeadDays:Number(e.target.value)})}/></Field><Field label="배송 리드타임(일)"><input type="number" min="0" value={form.deliveryLeadDays} onChange={e=>setForm({...form,deliveryLeadDays:Number(e.target.value)})}/></Field><Field label="발주 파일명"><input value={form.orderFileName} onChange={e=>setForm({...form,orderFileName:e.target.value})}/></Field><Field label="발주 시트명"><input value={form.orderSheetName} onChange={e=>setForm({...form,orderSheetName:e.target.value})}/></Field><Field label="발주서 컬럼" wide><input value={form.orderColumns} onChange={e=>setForm({...form,orderColumns:e.target.value})}/></Field><Field label="송장 컬럼" wide><input value={form.invoiceColumns} onChange={e=>setForm({...form,invoiceColumns:e.target.value})}/></Field><Field label="송장 주문번호 컬럼"><input value={form.invoiceMapOrderId} onChange={e=>setForm({...form,invoiceMapOrderId:e.target.value})}/></Field><Field label="송장 택배사 컬럼"><input value={form.invoiceMapCarrier} onChange={e=>setForm({...form,invoiceMapCarrier:e.target.value})}/></Field><Field label="송장번호 컬럼"><input value={form.invoiceMapInvoice} onChange={e=>setForm({...form,invoiceMapInvoice:e.target.value})}/></Field><Field label="품질 기본"><select value={form.defectAction} onChange={e=>setForm({...form,defectAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="오배송 기본"><select value={form.wrongAction} onChange={e=>setForm({...form,wrongAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="파손 기본"><select value={form.damageAction} onChange={e=>setForm({...form,damageAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="반품 배송비"><select value={form.returnShippingPayer} onChange={e=>setForm({...form,returnShippingPayer:e.target.value})}><option>도매처</option><option>판매자</option><option>고객</option></select></Field></div><div className="formActions"><button className="secondary" onClick={()=>setShowForm(false)}>취소</button><button className="primary" onClick={save}>저장</button></div></div>}
-  <div className="panel"><div className="table"><table><thead><tr><th>도매처</th><th>마감</th><th>최소발주</th><th>예상일정</th><th>연결상품</th><th>양식</th><th>상태</th><th>관리</th></tr></thead><tbody>{suppliers.map(s=><tr key={s.id}><td><b>{s.name}</b><small className="subText">{s.contact} · {s.method}</small></td><td>발주 {s.orderDeadline}<small className="subText">송장 {s.invoiceDeadline}</small></td><td>{s.minOrderQty||1}개<small className="subText">{money(s.minOrderAmount||0)}</small></td><td>출고 +{s.shipLeadDays||1}일<small className="subText">도착 +{(s.shipLeadDays||1)+(s.deliveryLeadDays||2)}일</small></td><td>{products.filter(p=>p.supplier===s.name||p.alternateSupplier===s.name).length}개</td><td>{s.orderSheetName||"발주서"}<small className="subText">{s.orderFileName}</small></td><td><Tag>{s.active?"사용중":"중지"}</Tag></td><td className="actions"><button className="secondary" onClick={()=>edit(s)}>수정</button><button className="secondary" onClick={()=>setSuppliers(p=>p.map(x=>x.id===s.id?{...x,active:!x.active}:x))}>{s.active?"중지":"사용"}</button></td></tr>)}</tbody></table></div></div></>;
+  return <><PageHead title="도매처 관리" description="발주 전달대상·메시지·마감·휴무·발주/송장 양식·CS 규정을 도매처별로 저장합니다." actions={<button className="primary" onClick={()=>{setForm(emptyForm);setEditingId(null);setShowForm(true)}}>+ 도매처 추가</button>}/>
+  {showForm&&<div className="panel"><h2>{editingId?"도매처 수정":"도매처 추가"}</h2><div className="formGrid"><Field label="도매처명"><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></Field><Field label="연락처"><input value={form.contact} onChange={e=>setForm({...form,contact:e.target.value})}/></Field><Field label="발주 방식"><select value={form.method} onChange={e=>setForm({...form,method:e.target.value})}><option>카카오톡</option><option>문자</option><option>이메일</option><option>기타</option></select></Field><Field label="발주 전달 대상/채팅방"><input value={form.shareTarget||""} placeholder="예: A농장 오픈채팅" onChange={e=>setForm({...form,shareTarget:e.target.value})}/></Field><Field label="발주 공유 메시지" wide><input value={form.orderShareMessage||""} onChange={e=>setForm({...form,orderShareMessage:e.target.value})} placeholder="{도매처} {발주번호} {주문수} 사용 가능"/></Field><Field label="발주 마감"><input type="time" value={form.orderDeadline} onChange={e=>setForm({...form,orderDeadline:e.target.value})}/></Field><Field label="송장 마감"><input type="time" value={form.invoiceDeadline} onChange={e=>setForm({...form,invoiceDeadline:e.target.value})}/></Field><Field label="회신 제한(시간)"><input type="number" value={form.responseDeadlineHours} onChange={e=>setForm({...form,responseDeadlineHours:Number(e.target.value)})}/></Field><Field label="최소 발주 수량"><input type="number" min="1" value={form.minOrderQty} onChange={e=>setForm({...form,minOrderQty:Number(e.target.value)})}/></Field><Field label="최소 발주 금액"><input type="number" min="0" value={form.minOrderAmount} onChange={e=>setForm({...form,minOrderAmount:Number(e.target.value)})}/></Field><Field label="휴무일(YYYY-MM-DD, 쉼표구분)"><input value={form.holidays||""} onChange={e=>setForm({...form,holidays:e.target.value})}/></Field><Field label="출고 리드타임(일)"><input type="number" min="0" value={form.shipLeadDays} onChange={e=>setForm({...form,shipLeadDays:Number(e.target.value)})}/></Field><Field label="배송 리드타임(일)"><input type="number" min="0" value={form.deliveryLeadDays} onChange={e=>setForm({...form,deliveryLeadDays:Number(e.target.value)})}/></Field><Field label="발주 파일명"><input value={form.orderFileName} onChange={e=>setForm({...form,orderFileName:e.target.value})}/></Field><Field label="발주 시트명"><input value={form.orderSheetName} onChange={e=>setForm({...form,orderSheetName:e.target.value})}/></Field><Field label="발주서 컬럼" wide><input value={form.orderColumns} onChange={e=>setForm({...form,orderColumns:e.target.value})}/></Field><Field label="송장 컬럼" wide><input value={form.invoiceColumns} onChange={e=>setForm({...form,invoiceColumns:e.target.value})}/></Field><Field label="송장 주문번호 컬럼"><input value={form.invoiceMapOrderId} onChange={e=>setForm({...form,invoiceMapOrderId:e.target.value})}/></Field><Field label="송장 택배사 컬럼"><input value={form.invoiceMapCarrier} onChange={e=>setForm({...form,invoiceMapCarrier:e.target.value})}/></Field><Field label="송장번호 컬럼"><input value={form.invoiceMapInvoice} onChange={e=>setForm({...form,invoiceMapInvoice:e.target.value})}/></Field><Field label="품질 기본"><select value={form.defectAction} onChange={e=>setForm({...form,defectAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="오배송 기본"><select value={form.wrongAction} onChange={e=>setForm({...form,wrongAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="파손 기본"><select value={form.damageAction} onChange={e=>setForm({...form,damageAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="반품 배송비"><select value={form.returnShippingPayer} onChange={e=>setForm({...form,returnShippingPayer:e.target.value})}><option>도매처</option><option>판매자</option><option>고객</option></select></Field></div><div className="formActions"><button className="secondary" onClick={()=>setShowForm(false)}>취소</button><button className="primary" onClick={save}>저장</button></div></div>}
+  <div className="panel"><div className="table"><table><thead><tr><th>도매처</th><th>발주 전달</th><th>마감</th><th>최소발주</th><th>예상일정</th><th>연결상품</th><th>양식</th><th>상태</th><th>관리</th></tr></thead><tbody>{suppliers.map(s=><tr key={s.id}><td><b>{s.name}</b><small className="subText">{s.contact}</small></td><td>{s.method}<small className="subText">{s.shareTarget||"대상 미설정"}</small></td><td>발주 {s.orderDeadline}<small className="subText">송장 {s.invoiceDeadline}</small></td><td>{s.minOrderQty||1}개<small className="subText">{money(s.minOrderAmount||0)}</small></td><td>출고 +{s.shipLeadDays||1}일<small className="subText">도착 +{(s.shipLeadDays||1)+(s.deliveryLeadDays||2)}일</small></td><td>{products.filter(p=>p.supplier===s.name||p.alternateSupplier===s.name).length}개</td><td>{s.orderSheetName||"발주서"}<small className="subText">{s.orderFileName}</small></td><td><Tag>{s.active?"사용중":"중지"}</Tag></td><td className="actions"><button className="secondary" onClick={()=>edit(s)}>수정</button><button className="secondary" onClick={()=>setSuppliers(p=>p.map(x=>x.id===s.id?{...x,active:!x.active}:x))}>{s.active?"중지":"사용"}</button></td></tr>)}</tbody></table></div></div></>;
 }
 
 function ProductLinkPage({ products, setProducts, suppliers, productFilter }) {
@@ -1257,8 +1414,8 @@ function SettingsPage({ settings,setSettings,orders,products,suppliers,invoices,
   const restore=async file=>{if(!file)return;try{const d=JSON.parse(await file.text());if(!d.orders||!d.products||!d.suppliers)throw new Error();setOrders(d.orders);setProducts(d.products);setSuppliers(d.suppliers);setInvoices(d.invoices||[]);setPurchaseBatches(d.purchaseBatches||[]);setInquiries(d.inquiries||[]);setReturnCases(d.returnCases||[]);setCsLogs(d.csLogs||[]);setInvoiceLogs(d.invoiceLogs||[]);setActivityLogs(d.activityLogs||[]);setNotifications(d.notifications||[]);setMarketingLogs(d.marketingLogs||[]);setSettings({...defaultSettings,...(d.settings||{}),dataVersion:DATA_VERSION});alert("백업 복원 완료")}catch{alert("SellerFlow 백업 파일이 아닙니다.")} if(restoreRef.current)restoreRef.current.value=""};
   const integrityCheck=()=>{const issues=[];orders.forEach(o=>{if(!products.some(p=>p.name===o.product))issues.push(`${o.id}: 상품 데이터 없음`);if(o.purchaseStatus==="발주완료"&&!o.marketing&&!invoices.some(r=>r.id===o.id))issues.push(`${o.id}: 운송장 행 없음`);if(o.supplier!=="미연결"&&!suppliers.some(s=>s.name===o.supplier))issues.push(`${o.id}: 없는 도매처 ${o.supplier}`)});const dup={};invoices.forEach(r=>{if(r.invoice)dup[r.invoice]=(dup[r.invoice]||0)+1});Object.entries(dup).filter(([,n])=>n>1).forEach(([x])=>issues.push(`중복 송장 ${x}`));alert(issues.length?`점검 ${issues.length}건\n\n${issues.slice(0,15).join("\n")}`:"데이터 무결성 이상 없음")};
   const restoreAuto=s=>{if(!confirm("이 자동 백업 시점으로 복구할까요?"))return;const d=s.data;setOrders(d.orders||[]);setProducts(d.products||[]);setSuppliers(d.suppliers||[]);setInvoices(d.invoices||[]);setPurchaseBatches(d.purchaseBatches||[]);setInquiries(d.inquiries||[]);setReturnCases(d.returnCases||[]);setCsLogs(d.csLogs||[]);setInvoiceLogs(d.invoiceLogs||[]);setActivityLogs(d.activityLogs||[]);setNotifications(d.notifications||[]);setMarketingLogs(d.marketingLogs||[]);setSettings({...defaultSettings,...(d.settings||{}),dataVersion:DATA_VERSION});alert("자동 백업 복구 완료")};
-  return <><PageHead title="설정" description="역할·운영모드·API 상태·안전장치·개인정보·백업·알림을 관리합니다."/>
-  <div className="panel"><h2>운영 모드 / 권한</h2><div className="formGrid"><Field label="현재 역할"><select value={settings.currentRole} onChange={e=>setSettings({...settings,currentRole:e.target.value})}><option>관리자</option><option>발주 담당</option><option>CS 담당</option><option>조회 전용</option></select></Field><Field label="시스템 모드"><select value={settings.systemMode} onChange={e=>setSettings({...settings,systemMode:e.target.value})}><option>테스트</option><option>실운영 준비</option></select></Field><Field label="API 상태"><input readOnly value={settings.apiOutage?"장애모드":settings.wingStatus||"미연결"}/></Field><Field label="마지막 동기화"><input readOnly value={settings.apiLastSyncAt?new Date(settings.apiLastSyncAt).toLocaleString("ko-KR"):"아직 없음"}/></Field><Field label="API 성공률"><input readOnly value={`${Number(settings.apiSuccessRate||0)}%`}/></Field><Field label="자동 재시도 횟수"><input type="number" min="0" max="5" value={settings.retryLimit} onChange={e=>setSettings({...settings,retryLimit:Number(e.target.value)})}/></Field><Field label="고가 주문 확인 기준"><input type="number" value={settings.highValueThreshold} onChange={e=>setSettings({...settings,highValueThreshold:Number(e.target.value)})}/></Field><Field label="다량 주문 확인 기준"><input type="number" value={settings.bulkQtyThreshold} onChange={e=>setSettings({...settings,bulkQtyThreshold:Number(e.target.value)})}/></Field></div><div className="formActions left"><button className={settings.apiOutage?"dangerButton":"secondary"} onClick={()=>setSettings({...settings,apiOutage:!settings.apiOutage})}>{settings.apiOutage?"API 장애모드 해제":"API 장애모드 켜기"}</button><button className="secondary" onClick={()=>setSettings({...settings,apiLastSyncAt:nowIso(),apiSuccessRate:100,wingStatus:"연결 테스트 통과(데모)"})}>API 상태 테스트(데모)</button></div><p className="securityNote">실운영 준비를 선택해도 현재 MVP는 실제 Coupang WING으로 주문/송장을 전송하지 않습니다. API Secret은 브라우저에 저장하지 않습니다.</p></div>
+  return <><PageHead title="설정" description="테마·역할·운영모드·API 상태·안전장치·개인정보·백업·알림을 관리합니다."/>
+  <div className="panel"><h2>운영 모드 / 권한</h2><div className="formGrid"><Field label="현재 역할"><select value={settings.currentRole} onChange={e=>setSettings({...settings,currentRole:e.target.value})}><option>관리자</option><option>발주 담당</option><option>CS 담당</option><option>조회 전용</option></select></Field><Field label="시스템 모드"><select value={settings.systemMode} onChange={e=>setSettings({...settings,systemMode:e.target.value})}><option>테스트</option><option>실운영 준비</option></select></Field><Field label="화면 테마"><select value={settings.theme || "system"} onChange={e=>setSettings({...settings,theme:e.target.value})}><option value="system">시스템 설정</option><option value="light">라이트</option><option value="dark">다크</option></select></Field><Field label="API 상태"><input readOnly value={settings.apiOutage?"장애모드":settings.wingStatus||"미연결"}/></Field><Field label="마지막 동기화"><input readOnly value={settings.apiLastSyncAt?new Date(settings.apiLastSyncAt).toLocaleString("ko-KR"):"아직 없음"}/></Field><Field label="API 성공률"><input readOnly value={`${Number(settings.apiSuccessRate||0)}%`}/></Field><Field label="자동 재시도 횟수"><input type="number" min="0" max="5" value={settings.retryLimit} onChange={e=>setSettings({...settings,retryLimit:Number(e.target.value)})}/></Field><Field label="고가 주문 확인 기준"><input type="number" value={settings.highValueThreshold} onChange={e=>setSettings({...settings,highValueThreshold:Number(e.target.value)})}/></Field><Field label="다량 주문 확인 기준"><input type="number" value={settings.bulkQtyThreshold} onChange={e=>setSettings({...settings,bulkQtyThreshold:Number(e.target.value)})}/></Field></div><div className="formActions left"><button className={settings.apiOutage?"dangerButton":"secondary"} onClick={()=>setSettings({...settings,apiOutage:!settings.apiOutage})}>{settings.apiOutage?"API 장애모드 해제":"API 장애모드 켜기"}</button><button className="secondary" onClick={()=>setSettings({...settings,apiLastSyncAt:nowIso(),apiSuccessRate:100,wingStatus:"연결 테스트 통과(데모)"})}>API 상태 테스트(데모)</button></div><p className="securityNote">실운영 준비를 선택해도 현재 MVP는 실제 Coupang WING으로 주문/송장을 전송하지 않습니다. API Secret은 브라우저에 저장하지 않습니다.</p></div>
   <div className="panel"><h2>개인정보 / 보관 정책</h2><div className="formGrid"><Field label="목록 개인정보 마스킹"><select value={settings.privacyMasking?"사용":"해제"} onChange={e=>setSettings({...settings,privacyMasking:e.target.value==="사용"})}><option>사용</option><option>해제</option></select></Field><Field label="보관기간(일)"><input type="number" min="30" value={settings.dataRetentionDays} onChange={e=>setSettings({...settings,dataRetentionDays:Number(e.target.value)})}/></Field><Field label="자동 정리"><select value={settings.autoRetentionCleanup?"사용":"해제"} onChange={e=>setSettings({...settings,autoRetentionCleanup:e.target.value==="사용"})}><option>해제</option><option>사용</option></select></Field><Field label="자동 백업 간격(분)"><input type="number" min="1" value={settings.autoBackupMinutes} onChange={e=>setSettings({...settings,autoBackupMinutes:Number(e.target.value)})}/></Field></div></div>
   <div className="panel"><h2>보내는 사람</h2><div className="formGrid"><Field label="이름"><input value={settings.senderName} onChange={e=>setSettings({...settings,senderName:e.target.value})}/></Field><Field label="전화번호"><input value={settings.senderPhone} onChange={e=>setSettings({...settings,senderPhone:e.target.value})}/></Field><Field label="주소"><input value={settings.senderAddress} onChange={e=>setSettings({...settings,senderAddress:e.target.value})}/></Field></div></div>
   <div className="panel"><h2>알림</h2><div className="toggleGrid">{[["notifyOrderImport","주문 가져오기"],["notifyInvoiceDeadline","송장 마감"],["notifyCsRisk","CS 위험"],["notifyPurchaseDelay","발주 지연"],["notifyInvoiceMatchFail","송장 실패"],["notifyRegisterDone","등록 완료"]].map(([k,l])=><label key={k}><input type="checkbox" checked={Boolean(settings[k])} onChange={e=>setSettings({...settings,[k]:e.target.checked})}/> {l}</label>)}</div><div className="formActions left"><button className="secondary" onClick={requestNotifications}>브라우저 알림 권한</button><button className="secondary" onClick={()=>pushNotification("테스트 알림","SellerFlow 알림 정상","대시보드")}>알림 테스트</button></div></div>
