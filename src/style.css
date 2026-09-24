@@ -196,3 +196,14 @@ html[data-theme="dark"] .mobileQuickActions{background:#171c24;border-color:#2a3
 [data-theme="dark"] .deliveryStatus.sent{background:#173b31;color:#8ce1c0}
 .supplierDeliveryPanel .actions{min-width:300px}
 @media(max-width:700px){.supplierDeliveryPanel .actions{min-width:260px}.supplierDeliveryPanel .primary,.supplierDeliveryPanel .secondary{min-height:44px}}
+
+
+/* v7 automatic purchase dispatch */
+.dispatchQueue{border-color:rgba(114,87,255,.18)}
+.dispatchStatus{display:inline-flex;align-items:center;padding:6px 9px;border-radius:999px;font-size:11px;font-weight:800;white-space:nowrap}
+.dispatchStatus.sent{background:#eafaf3;color:#117a58}
+.dispatchStatus.pending{background:#f2efff;color:#654be6}
+.dispatchStatus.failed{background:#fff0f2;color:#c93647}
+html[data-theme="dark"] .dispatchStatus.sent{background:#13382d;color:#7fe1ba}
+html[data-theme="dark"] .dispatchStatus.pending{background:#272341;color:#b5a8ff}
+html[data-theme="dark"] .dispatchStatus.failed{background:#44252b;color:#ff9bab}

@@ -5,7 +5,7 @@ import JSZip from "jszip";
 import "./style.css";
 
 const STORAGE_PREFIX = "sellerflow_v2_";
-const DATA_VERSION = 6;
+const DATA_VERSION = 7;
 const nowIso = () => new Date().toISOString();
 const money = (value) => `₩${Number(value || 0).toLocaleString("ko-KR")}`;
 const uid = (prefix = "ID") => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -195,6 +195,7 @@ const defaultSettings = {
   senderName: "", senderPhone: "", senderAddress: "",
   browserNotifications: false, notifyOrderImport: true, notifyInvoiceDeadline: true, notifyCsRisk: true, notifyPurchaseDelay: true, notifyInvoiceMatchFail: true, notifyRegisterDone: true,
   currentRole: "관리자", systemMode: "테스트", theme: "system", retryLimit: 3, highValueThreshold: 100000, bulkQtyThreshold: 5,
+  autoPurchaseDispatch: true, purchaseDispatchEndpoint: "/api/purchase-dispatch", purchaseDispatchRetryLimit: 3,
   privacyMasking: true, dataRetentionDays: 180, autoRetentionCleanup: false, autoBackupMinutes: 15,
   dashboardCards: ["연결 필요","발주 대기","운송장 대기","쿠팡 등록 가능","CS 마감 임박","운영 위험"],
   dataVersion: DATA_VERSION,
@@ -242,6 +243,32 @@ function saveBlob(blob, filename) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+  }
+  return btoa(binary);
+}
+
+async function postPurchaseDispatch(endpoint, payload) {
+  const response = await fetch(endpoint || "/api/purchase-dispatch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  let data = {};
+  try { data = await response.json(); } catch {}
+  if (!response.ok || data?.ok === false) {
+    const error = new Error(data?.message || `전송 서버 오류 (${response.status})`);
+    error.code = data?.code || "DISPATCH_FAILED";
+    throw error;
+  }
+  return data;
 }
 
 function normalizeHeader(value) {
@@ -433,6 +460,7 @@ function App() {
   const [suppliers, setSuppliers] = usePersistentState("suppliers", defaultSuppliers);
   const [invoices, setInvoices] = usePersistentState("invoices", defaultInvoices);
   const [purchaseBatches, setPurchaseBatches] = usePersistentState("purchase_batches", []);
+  const [purchaseDispatches, setPurchaseDispatches] = usePersistentState("purchase_dispatches", []);
   const [inquiries, setInquiries] = usePersistentState("cs_inquiries", defaultInquiries);
   const [returnCases, setReturnCases] = usePersistentState("cs_returns", defaultReturnCases);
   const [csLogs, setCsLogs] = usePersistentState("cs_logs", []);
@@ -445,7 +473,7 @@ function App() {
   const [autoBackups, setAutoBackups] = usePersistentState("auto_backups", []);
 
   const snapshotNow = (label = "수동 스냅샷") => {
-    const snap = { id: uid("SNAP"), time: nowIso(), label, data: compactSnapshot({ orders, products, suppliers, invoices, purchaseBatches, inquiries, returnCases, csLogs, invoiceLogs, activityLogs, notifications, marketingLogs, settings }) };
+    const snap = { id: uid("SNAP"), time: nowIso(), label, data: compactSnapshot({ orders, products, suppliers, invoices, purchaseBatches, purchaseDispatches, inquiries, returnCases, csLogs, invoiceLogs, activityLogs, notifications, marketingLogs, settings }) };
     setUndoStack(prev => [snap, ...prev].slice(0, 8));
     return snap;
   };
@@ -455,7 +483,7 @@ function App() {
     if (!snap) return alert("되돌릴 최근 작업이 없습니다.");
     if (!window.confirm(`${snap.label} 이전 상태로 되돌릴까요?`)) return;
     const d = snap.data;
-    setOrders(d.orders || []); setProducts(d.products || []); setSuppliers(d.suppliers || []); setInvoices(d.invoices || []); setPurchaseBatches(d.purchaseBatches || []);
+    setOrders(d.orders || []); setProducts(d.products || []); setSuppliers(d.suppliers || []); setInvoices(d.invoices || []); setPurchaseBatches(d.purchaseBatches || []); setPurchaseDispatches(d.purchaseDispatches || []);
     setInquiries(d.inquiries || []); setReturnCases(d.returnCases || []); setCsLogs(d.csLogs || []); setInvoiceLogs(d.invoiceLogs || []); setActivityLogs(d.activityLogs || []); setNotifications(d.notifications || []); setMarketingLogs(d.marketingLogs || []); setSettings({ ...defaultSettings, ...(d.settings || {}) });
     setUndoStack(prev => prev.slice(1));
     alert("최근 스냅샷으로 복구했습니다.");
@@ -541,19 +569,19 @@ function App() {
   useEffect(() => {
     setOrders(prev => prev.map(o => ({ phone:"", address:"", customerNote:"", supplierNote:"", internalMemo:"", hold:false, holdReason:"", favorite:false, retryCount:0, ...o })));
     setProducts(prev => prev.map(p => ({ alternateSupplier:"", automationMode:"자동", stockout:false, costHistory:[], stockoutHistory:[], ...p })));
-    setSuppliers(prev => prev.map(s => ({ minOrderQty:1, minOrderAmount:0, holidays:"", shipLeadDays:1, deliveryLeadDays:2, orderFileName:"{도매처}_{날짜}_발주서", orderSheetName:"발주서", invoiceMapOrderId:"주문번호", invoiceMapCarrier:"택배사", invoiceMapInvoice:"운송장번호", shareTarget:"", orderShareMessage:"{도매처} 발주서입니다. 발주번호 {발주번호}, 총 {주문수}건입니다. 출고 후 송장 파일 회신 부탁드립니다.", ...s })));
+    setSuppliers(prev => prev.map(s => ({ minOrderQty:1, minOrderAmount:0, holidays:"", shipLeadDays:1, deliveryLeadDays:2, orderFileName:"{도매처}_{날짜}_발주서", orderSheetName:"발주서", invoiceMapOrderId:"주문번호", invoiceMapCarrier:"택배사", invoiceMapInvoice:"운송장번호", shareTarget:"", orderShareMessage:"{도매처} 발주서입니다. 발주번호 {발주번호}, 총 {주문수}건입니다. 출고 후 송장 파일 회신 부탁드립니다.", dispatchEnabled:true, dispatchRecipientId:"", dispatchChannel:"webhook", ...s })));
     setSettings(prev => ({ ...defaultSettings, ...prev, dataVersion: DATA_VERSION }));
   }, []);
 
   useEffect(() => {
     const minutes = Math.max(1, Number(settings.autoBackupMinutes || 15));
     const makeBackup = () => {
-      const snap = { id:uid("AUTO"), time:nowIso(), label:"자동 백업", data:compactSnapshot({ orders, products, suppliers, invoices, purchaseBatches, inquiries, returnCases, csLogs, invoiceLogs, activityLogs, notifications, marketingLogs, settings }) };
+      const snap = { id:uid("AUTO"), time:nowIso(), label:"자동 백업", data:compactSnapshot({ orders, products, suppliers, invoices, purchaseBatches, purchaseDispatches, inquiries, returnCases, csLogs, invoiceLogs, activityLogs, notifications, marketingLogs, settings }) };
       setAutoBackups(prev => [snap, ...prev].slice(0, 5));
     };
     const timer = setInterval(makeBackup, minutes * 60000);
     return () => clearInterval(timer);
-  }, [settings.autoBackupMinutes, orders, products, suppliers, invoices, purchaseBatches, inquiries, returnCases, csLogs, invoiceLogs, activityLogs, notifications, marketingLogs, settings]);
+  }, [settings.autoBackupMinutes, orders, products, suppliers, invoices, purchaseBatches, purchaseDispatches, inquiries, returnCases, csLogs, invoiceLogs, activityLogs, notifications, marketingLogs, settings]);
 
   useEffect(() => {
     if (!settings.autoRetentionCleanup) return;
@@ -655,7 +683,7 @@ function App() {
 
   const shared = {
     orders, setOrders, products, setProducts, suppliers, setSuppliers, invoices, setInvoices,
-    purchaseBatches, setPurchaseBatches, inquiries, setInquiries, returnCases, setReturnCases,
+    purchaseBatches, setPurchaseBatches, purchaseDispatches, setPurchaseDispatches, inquiries, setInquiries, returnCases, setReturnCases,
     csLogs, setCsLogs, invoiceLogs, setInvoiceLogs, activityLogs, setActivityLogs,
     notifications, setNotifications, settings, setSettings, marketingLogs, setMarketingLogs,
     pushActivity, pushNotification, openPage, undoStack, setUndoStack, autoBackups, setAutoBackups, snapshotNow, undoLast,
@@ -833,7 +861,7 @@ function OrderPage({ orders, setOrders, products, setProducts, suppliers, invoic
   </>;
 }
 
-function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInvoices, purchaseBatches, setPurchaseBatches, settings, pushActivity, pushNotification }) {
+function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInvoices, purchaseBatches, setPurchaseBatches, purchaseDispatches, setPurchaseDispatches, settings, pushActivity, pushNotification }) {
   const [selected, setSelected] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [sharingKey, setSharingKey] = useState("");
@@ -905,6 +933,59 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
     const supplier = suppliers.find((s) => s.name === supplierName);
     const template = supplier?.orderShareMessage || "{도매처} 발주서입니다. 발주번호 {발주번호}, 총 {주문수}건입니다. 출고 후 송장 파일 회신 부탁드립니다.";
     return template.replaceAll("{도매처}", supplierName).replaceAll("{발주번호}", batch.id).replaceAll("{주문수}", String(count));
+  };
+
+  const upsertDispatch = (record) => {
+    setPurchaseDispatches((prev) => {
+      const exists = prev.some((item) => item.id === record.id);
+      const next = exists ? prev.map((item) => item.id === record.id ? { ...item, ...record } : item) : [record, ...prev];
+      return next.slice(0, 200);
+    });
+  };
+
+  const dispatchSupplierFile = async (batchId, supplierName, items, retry = false) => {
+    const supplier = suppliers.find((s) => s.name === supplierName);
+    const dispatchId = `${batchId}:${supplierName}`;
+    const previous = purchaseDispatches.find((item) => item.id === dispatchId);
+    const attempt = retry ? Number(previous?.attempt || 0) + 1 : 1;
+    const maxRetry = Math.max(1, Number(settings.purchaseDispatchRetryLimit || 3));
+    if (!supplier?.dispatchEnabled) {
+      upsertDispatch({ id: dispatchId, batchId, supplierName, status: "수동전송", attempt, updatedAt: nowIso(), message: "도매처 자동전송이 꺼져 있습니다." });
+      return { ok: false, manual: true };
+    }
+    const recipientId = String(supplier.dispatchRecipientId || supplier.shareTarget || "").trim();
+    if (!recipientId) {
+      upsertDispatch({ id: dispatchId, batchId, supplierName, status: "설정필요", attempt, updatedAt: nowIso(), message: "전송 대상 ID가 비어 있습니다." });
+      return { ok: false, config: true };
+    }
+    const { array, filename } = makeSupplierFile(supplierName, items);
+    const message = renderShareMessage({ id: batchId }, supplierName, items.length);
+    upsertDispatch({ id: dispatchId, batchId, supplierName, status: "전송중", attempt, fileName: filename, updatedAt: nowIso(), message: "서버 전송 요청 중" });
+    markDelivery(batchId, supplierName, "전송중", { method: "자동전송" });
+    try {
+      const result = await postPurchaseDispatch(settings.purchaseDispatchEndpoint || "/api/purchase-dispatch", {
+        batchId, supplierName, recipientId, channel: supplier.dispatchChannel || "webhook",
+        fileName: filename, fileBase64: arrayBufferToBase64(array), message, orderCount: items.length,
+      });
+      upsertDispatch({ id: dispatchId, batchId, supplierName, status: "전송완료", attempt, fileName: filename, updatedAt: nowIso(), sentAt: nowIso(), message: result?.message || "자동 전송 완료" });
+      markDelivery(batchId, supplierName, "자동전송완료", { sentAt: nowIso(), method: "자동전송" });
+      pushActivity("도매처 자동전송", `${batchId} · ${supplierName} · ${items.length}건 전송 완료`);
+      return { ok: true };
+    } catch (error) {
+      const finalStatus = attempt >= maxRetry ? "전송실패" : "재시도대기";
+      upsertDispatch({ id: dispatchId, batchId, supplierName, status: finalStatus, attempt, fileName: filename, updatedAt: nowIso(), message: error?.message || "전송 실패" });
+      markDelivery(batchId, supplierName, finalStatus, { method: "자동전송" });
+      pushNotification("발주 자동전송 실패", `${supplierName} · ${error?.message || "서버 연결 실패"}`, "발주 관리", "danger");
+      return { ok: false, error };
+    }
+  };
+
+  const retryDispatch = async (item) => {
+    const batch = purchaseBatches.find((b) => b.id === item.batchId);
+    if (!batch) return alert("발주 묶음을 찾을 수 없습니다.");
+    const items = batchSupplierOrders(batch, item.supplierName);
+    if (!items.length) return alert("해당 도매처 주문이 없습니다.");
+    await dispatchSupplierFile(batch.id, item.supplierName, items, true);
   };
 
   const markDelivery = (batchId, supplierName, status, extra = {}) => {
@@ -1006,12 +1087,19 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
     });
     const deliveries = Object.keys(grouped).reduce((acc, supplierName) => {
       const supplier = suppliers.find((s) => s.name === supplierName);
-      acc[supplierName] = { status: "미전송", sentAt: "", method: supplier?.method || "수동" };
+      acc[supplierName] = { status: settings.autoPurchaseDispatch && supplier?.dispatchEnabled ? "전송대기" : "미전송", sentAt: "", method: settings.autoPurchaseDispatch ? "자동전송" : (supplier?.method || "수동") };
       return acc;
     }, {});
     setPurchaseBatches((prev) => [{ id: batchId, createdAt: nowIso(), orderIds: targets.map((o) => o.id), suppliers: Object.keys(grouped), status: "발주완료", deliveries }, ...prev]);
     pushActivity("발주서 생성", `${targets.length}건 · ${Object.keys(grouped).length}개 도매처 발주서 ZIP 생성`, { batchId });
-    pushNotification("발주 완료", `${targets.length}건 발주서가 생성됐습니다. 도매처 전송센터에서 각 도매처 파일만 공유하세요.`, "발주 관리");
+    if (settings.autoPurchaseDispatch) {
+      pushNotification("발주 자동전송 시작", `${Object.keys(grouped).length}개 도매처 전송을 시작합니다.`, "발주 관리");
+      for (const [supplierName, items] of Object.entries(grouped)) {
+        await dispatchSupplierFile(batchId, supplierName, items, false);
+      }
+    } else {
+      pushNotification("발주 완료", `${targets.length}건 발주서가 생성됐습니다. 도매처 전송센터에서 각 도매처 파일만 공유하세요.`, "발주 관리");
+    }
     setSelected([]);
     setProcessing(false);
   };
@@ -1037,6 +1125,11 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
       <div className="panel"><label className="checkLine"><input type="checkbox" checked={eligible.length > 0 && selected.length === eligible.length} onChange={toggleAll} /> 전체 선택 · 발주 가능한 주문만</label><div className="table"><table><thead><tr><th>선택</th><th>주문번호</th><th>상품</th><th>도매처</th><th>수량</th><th>검증</th><th>상태</th></tr></thead><tbody>
         {eligible.length === 0 ? <tr><td colSpan="7">발주 대기 주문이 없습니다.</td></tr> : eligible.map((o) => { const issues = validate(o); return <tr key={o.id}><td><input type="checkbox" checked={selected.includes(o.id)} onChange={() => toggle(o.id)} /></td><td><b>{o.id}</b></td><td>{o.product}<small className="subText">{o.option}</small></td><td>{o.supplier}</td><td>{o.qty}</td><td>{issues.length ? <span className="severity danger">{issues.join(" · ")}</span> : <span className="okText">정상</span>}</td><td><Tag>{o.purchaseStatus}</Tag></td></tr>; })}
       </tbody></table></div></div>
+
+      <div className="panel dispatchQueue"><div className="panelHead"><div><h2>자동 발주 전송 큐</h2><p>발주서 생성 직후 도매처별 파일을 서버 전송 큐로 보내고 성공·실패·재시도를 기록합니다.</p></div><span className="muted">자동전송 {settings.autoPurchaseDispatch ? "켜짐" : "꺼짐"}</span></div>
+        {purchaseDispatches.length === 0 ? <div className="emptyLine">아직 자동 전송 기록이 없습니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>상태</th><th>시도</th><th>최근 결과</th><th>작업</th></tr></thead><tbody>{purchaseDispatches.slice(0,20).map((item)=><tr key={item.id}><td><b>{item.batchId}</b></td><td>{item.supplierName}</td><td><span className={`dispatchStatus ${item.status === "전송완료" ? "sent" : item.status.includes("실패") || item.status === "설정필요" ? "failed" : "pending"}`}>{item.status}</span></td><td>{item.attempt || 0}/{settings.purchaseDispatchRetryLimit || 3}</td><td>{item.message || "-"}<small className="subText">{item.updatedAt ? new Date(item.updatedAt).toLocaleString("ko-KR") : ""}</small></td><td>{item.status !== "전송완료" && <button className="secondary" onClick={()=>retryDispatch(item)}>재시도</button>}</td></tr>)}</tbody></table></div>}
+        <p className="securityNote">브라우저에는 API Secret을 저장하지 않습니다. 실제 외부 전송은 Vercel 서버의 환경변수로 연결한 전송 어댑터가 처리합니다.</p>
+      </div>
 
       <div className="panel supplierDeliveryPanel"><div className="panelHead"><div><h2>도매처 전송센터</h2><p>ZIP 전체가 아니라 각 도매처의 전용 XLSX만 공유합니다. iPad/모바일에서는 공유 버튼으로 카카오톡 공유창을 바로 열 수 있습니다.</p></div></div>
         {deliveryRows.length === 0 ? <div className="emptyLine">발주서를 생성하면 도매처별 전송 작업이 여기에 나타납니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>주문수</th><th>전달방식</th><th>대상</th><th>전송상태</th><th>작업</th></tr></thead><tbody>{deliveryRows.map(({batch,supplierName,items,info,supplier}) => { const key=`${batch.id}-${supplierName}`; return <tr key={key}><td><b>{batch.id}</b><small className="subText">{new Date(batch.createdAt).toLocaleString("ko-KR")}</small></td><td><b>{supplierName}</b></td><td>{items.length}건</td><td>{supplier?.method || info.method || "수동"}</td><td>{supplier?.shareTarget || "미설정"}</td><td><span className={`deliveryStatus ${info.status === "공유완료" ? "sent" : "pending"}`}>{info.status || "미전송"}</span>{info.sentAt && <small className="subText">{new Date(info.sentAt).toLocaleString("ko-KR")}</small>}</td><td className="actions"><button className="primary" disabled={sharingKey===key} onClick={()=>shareSupplierFile(batch,supplierName)}>{sharingKey===key?"공유 중...":info.status==="공유완료"?"다시 공유":"공유"}</button><button className="secondary" onClick={()=>downloadSupplierFile(batch,supplierName)}>파일</button><button className="secondary" onClick={()=>copyShareMessage(batch,supplierName)}>메시지</button>{info.status!=="공유완료"&&<button className="secondary" onClick={()=>markDelivery(batch.id,supplierName,"공유완료",{sentAt:nowIso(),method:supplier?.method||"수동"})}>완료표시</button>}</td></tr>; })}</tbody></table></div>}
@@ -1312,13 +1405,13 @@ function MarketingPage({ orders, setOrders, invoices, setInvoices, marketingLogs
 }
 
 function SupplierPage({ suppliers, setSuppliers, products }) {
-  const emptyForm={name:"",contact:"",method:"카카오톡",shareTarget:"",orderShareMessage:"{도매처} 발주서입니다. 발주번호 {발주번호}, 총 {주문수}건입니다. 출고 후 송장 파일 회신 부탁드립니다.",orderDeadline:"17:00",invoiceDeadline:"19:00",orderColumns:"주문번호,주문일,수취인,상품명,옵션,수량,주소",invoiceColumns:"주문번호,택배사,운송장번호",defectAction:"환불",wrongAction:"재배송",damageAction:"재배송",returnShippingPayer:"도매처",responseDeadlineHours:24,active:true,minOrderQty:1,minOrderAmount:0,holidays:"",shipLeadDays:1,deliveryLeadDays:2,orderFileName:"{도매처}_{날짜}_발주서",orderSheetName:"발주서",invoiceMapOrderId:"주문번호",invoiceMapCarrier:"택배사",invoiceMapInvoice:"운송장번호"};
+  const emptyForm={name:"",contact:"",method:"카카오톡",shareTarget:"",orderShareMessage:"{도매처} 발주서입니다. 발주번호 {발주번호}, 총 {주문수}건입니다. 출고 후 송장 파일 회신 부탁드립니다.",orderDeadline:"17:00",invoiceDeadline:"19:00",orderColumns:"주문번호,주문일,수취인,상품명,옵션,수량,주소",invoiceColumns:"주문번호,택배사,운송장번호",defectAction:"환불",wrongAction:"재배송",damageAction:"재배송",returnShippingPayer:"도매처",responseDeadlineHours:24,active:true,minOrderQty:1,minOrderAmount:0,holidays:"",shipLeadDays:1,deliveryLeadDays:2,orderFileName:"{도매처}_{날짜}_발주서",orderSheetName:"발주서",invoiceMapOrderId:"주문번호",invoiceMapCarrier:"택배사",invoiceMapInvoice:"운송장번호",dispatchEnabled:true,dispatchRecipientId:"",dispatchChannel:"webhook"};
   const [form,setForm]=useState(emptyForm); const [editingId,setEditingId]=useState(null); const [showForm,setShowForm]=useState(false);
   const save=()=>{if(!form.name.trim())return alert("도매처명 입력"); if(editingId)setSuppliers(p=>p.map(s=>s.id===editingId?{...s,...form,name:form.name.trim()}:s));else setSuppliers(p=>[...p,{...form,id:Date.now(),name:form.name.trim()}]);setForm(emptyForm);setEditingId(null);setShowForm(false)};
   const edit=s=>{setForm({...emptyForm,...s});setEditingId(s.id);setShowForm(true);window.scrollTo({top:0,behavior:"smooth"})};
   return <><PageHead title="도매처 관리" description="발주 전달대상·메시지·마감·휴무·발주/송장 양식·CS 규정을 도매처별로 저장합니다." actions={<button className="primary" onClick={()=>{setForm(emptyForm);setEditingId(null);setShowForm(true)}}>+ 도매처 추가</button>}/>
-  {showForm&&<div className="panel"><h2>{editingId?"도매처 수정":"도매처 추가"}</h2><div className="formGrid"><Field label="도매처명"><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></Field><Field label="연락처"><input value={form.contact} onChange={e=>setForm({...form,contact:e.target.value})}/></Field><Field label="발주 방식"><select value={form.method} onChange={e=>setForm({...form,method:e.target.value})}><option>카카오톡</option><option>문자</option><option>이메일</option><option>기타</option></select></Field><Field label="발주 전달 대상/채팅방"><input value={form.shareTarget||""} placeholder="예: A농장 오픈채팅" onChange={e=>setForm({...form,shareTarget:e.target.value})}/></Field><Field label="발주 공유 메시지" wide><input value={form.orderShareMessage||""} onChange={e=>setForm({...form,orderShareMessage:e.target.value})} placeholder="{도매처} {발주번호} {주문수} 사용 가능"/></Field><Field label="발주 마감"><input type="time" value={form.orderDeadline} onChange={e=>setForm({...form,orderDeadline:e.target.value})}/></Field><Field label="송장 마감"><input type="time" value={form.invoiceDeadline} onChange={e=>setForm({...form,invoiceDeadline:e.target.value})}/></Field><Field label="회신 제한(시간)"><input type="number" value={form.responseDeadlineHours} onChange={e=>setForm({...form,responseDeadlineHours:Number(e.target.value)})}/></Field><Field label="최소 발주 수량"><input type="number" min="1" value={form.minOrderQty} onChange={e=>setForm({...form,minOrderQty:Number(e.target.value)})}/></Field><Field label="최소 발주 금액"><input type="number" min="0" value={form.minOrderAmount} onChange={e=>setForm({...form,minOrderAmount:Number(e.target.value)})}/></Field><Field label="휴무일(YYYY-MM-DD, 쉼표구분)"><input value={form.holidays||""} onChange={e=>setForm({...form,holidays:e.target.value})}/></Field><Field label="출고 리드타임(일)"><input type="number" min="0" value={form.shipLeadDays} onChange={e=>setForm({...form,shipLeadDays:Number(e.target.value)})}/></Field><Field label="배송 리드타임(일)"><input type="number" min="0" value={form.deliveryLeadDays} onChange={e=>setForm({...form,deliveryLeadDays:Number(e.target.value)})}/></Field><Field label="발주 파일명"><input value={form.orderFileName} onChange={e=>setForm({...form,orderFileName:e.target.value})}/></Field><Field label="발주 시트명"><input value={form.orderSheetName} onChange={e=>setForm({...form,orderSheetName:e.target.value})}/></Field><Field label="발주서 컬럼" wide><input value={form.orderColumns} onChange={e=>setForm({...form,orderColumns:e.target.value})}/></Field><Field label="송장 컬럼" wide><input value={form.invoiceColumns} onChange={e=>setForm({...form,invoiceColumns:e.target.value})}/></Field><Field label="송장 주문번호 컬럼"><input value={form.invoiceMapOrderId} onChange={e=>setForm({...form,invoiceMapOrderId:e.target.value})}/></Field><Field label="송장 택배사 컬럼"><input value={form.invoiceMapCarrier} onChange={e=>setForm({...form,invoiceMapCarrier:e.target.value})}/></Field><Field label="송장번호 컬럼"><input value={form.invoiceMapInvoice} onChange={e=>setForm({...form,invoiceMapInvoice:e.target.value})}/></Field><Field label="품질 기본"><select value={form.defectAction} onChange={e=>setForm({...form,defectAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="오배송 기본"><select value={form.wrongAction} onChange={e=>setForm({...form,wrongAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="파손 기본"><select value={form.damageAction} onChange={e=>setForm({...form,damageAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="반품 배송비"><select value={form.returnShippingPayer} onChange={e=>setForm({...form,returnShippingPayer:e.target.value})}><option>도매처</option><option>판매자</option><option>고객</option></select></Field></div><div className="formActions"><button className="secondary" onClick={()=>setShowForm(false)}>취소</button><button className="primary" onClick={save}>저장</button></div></div>}
-  <div className="panel"><div className="table"><table><thead><tr><th>도매처</th><th>발주 전달</th><th>마감</th><th>최소발주</th><th>예상일정</th><th>연결상품</th><th>양식</th><th>상태</th><th>관리</th></tr></thead><tbody>{suppliers.map(s=><tr key={s.id}><td><b>{s.name}</b><small className="subText">{s.contact}</small></td><td>{s.method}<small className="subText">{s.shareTarget||"대상 미설정"}</small></td><td>발주 {s.orderDeadline}<small className="subText">송장 {s.invoiceDeadline}</small></td><td>{s.minOrderQty||1}개<small className="subText">{money(s.minOrderAmount||0)}</small></td><td>출고 +{s.shipLeadDays||1}일<small className="subText">도착 +{(s.shipLeadDays||1)+(s.deliveryLeadDays||2)}일</small></td><td>{products.filter(p=>p.supplier===s.name||p.alternateSupplier===s.name).length}개</td><td>{s.orderSheetName||"발주서"}<small className="subText">{s.orderFileName}</small></td><td><Tag>{s.active?"사용중":"중지"}</Tag></td><td className="actions"><button className="secondary" onClick={()=>edit(s)}>수정</button><button className="secondary" onClick={()=>setSuppliers(p=>p.map(x=>x.id===s.id?{...x,active:!x.active}:x))}>{s.active?"중지":"사용"}</button></td></tr>)}</tbody></table></div></div></>;
+  {showForm&&<div className="panel"><h2>{editingId?"도매처 수정":"도매처 추가"}</h2><div className="formGrid"><Field label="도매처명"><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></Field><Field label="연락처"><input value={form.contact} onChange={e=>setForm({...form,contact:e.target.value})}/></Field><Field label="발주 방식"><select value={form.method} onChange={e=>setForm({...form,method:e.target.value})}><option>카카오톡</option><option>문자</option><option>이메일</option><option>기타</option></select></Field><Field label="발주 전달 대상/채팅방"><input value={form.shareTarget||""} placeholder="예: A농장 오픈채팅" onChange={e=>setForm({...form,shareTarget:e.target.value})}/></Field><Field label="자동전송 대상 ID"><input value={form.dispatchRecipientId||""} placeholder="서버 어댑터가 사용하는 대상 ID" onChange={e=>setForm({...form,dispatchRecipientId:e.target.value})}/></Field><Field label="자동전송"><select value={form.dispatchEnabled===false?"끄기":"켜기"} onChange={e=>setForm({...form,dispatchEnabled:e.target.value==="켜기"})}><option>켜기</option><option>끄기</option></select></Field><Field label="발주 공유 메시지" wide><input value={form.orderShareMessage||""} onChange={e=>setForm({...form,orderShareMessage:e.target.value})} placeholder="{도매처} {발주번호} {주문수} 사용 가능"/></Field><Field label="발주 마감"><input type="time" value={form.orderDeadline} onChange={e=>setForm({...form,orderDeadline:e.target.value})}/></Field><Field label="송장 마감"><input type="time" value={form.invoiceDeadline} onChange={e=>setForm({...form,invoiceDeadline:e.target.value})}/></Field><Field label="회신 제한(시간)"><input type="number" value={form.responseDeadlineHours} onChange={e=>setForm({...form,responseDeadlineHours:Number(e.target.value)})}/></Field><Field label="최소 발주 수량"><input type="number" min="1" value={form.minOrderQty} onChange={e=>setForm({...form,minOrderQty:Number(e.target.value)})}/></Field><Field label="최소 발주 금액"><input type="number" min="0" value={form.minOrderAmount} onChange={e=>setForm({...form,minOrderAmount:Number(e.target.value)})}/></Field><Field label="휴무일(YYYY-MM-DD, 쉼표구분)"><input value={form.holidays||""} onChange={e=>setForm({...form,holidays:e.target.value})}/></Field><Field label="출고 리드타임(일)"><input type="number" min="0" value={form.shipLeadDays} onChange={e=>setForm({...form,shipLeadDays:Number(e.target.value)})}/></Field><Field label="배송 리드타임(일)"><input type="number" min="0" value={form.deliveryLeadDays} onChange={e=>setForm({...form,deliveryLeadDays:Number(e.target.value)})}/></Field><Field label="발주 파일명"><input value={form.orderFileName} onChange={e=>setForm({...form,orderFileName:e.target.value})}/></Field><Field label="발주 시트명"><input value={form.orderSheetName} onChange={e=>setForm({...form,orderSheetName:e.target.value})}/></Field><Field label="발주서 컬럼" wide><input value={form.orderColumns} onChange={e=>setForm({...form,orderColumns:e.target.value})}/></Field><Field label="송장 컬럼" wide><input value={form.invoiceColumns} onChange={e=>setForm({...form,invoiceColumns:e.target.value})}/></Field><Field label="송장 주문번호 컬럼"><input value={form.invoiceMapOrderId} onChange={e=>setForm({...form,invoiceMapOrderId:e.target.value})}/></Field><Field label="송장 택배사 컬럼"><input value={form.invoiceMapCarrier} onChange={e=>setForm({...form,invoiceMapCarrier:e.target.value})}/></Field><Field label="송장번호 컬럼"><input value={form.invoiceMapInvoice} onChange={e=>setForm({...form,invoiceMapInvoice:e.target.value})}/></Field><Field label="품질 기본"><select value={form.defectAction} onChange={e=>setForm({...form,defectAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="오배송 기본"><select value={form.wrongAction} onChange={e=>setForm({...form,wrongAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="파손 기본"><select value={form.damageAction} onChange={e=>setForm({...form,damageAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="반품 배송비"><select value={form.returnShippingPayer} onChange={e=>setForm({...form,returnShippingPayer:e.target.value})}><option>도매처</option><option>판매자</option><option>고객</option></select></Field></div><div className="formActions"><button className="secondary" onClick={()=>setShowForm(false)}>취소</button><button className="primary" onClick={save}>저장</button></div></div>}
+  <div className="panel"><div className="table"><table><thead><tr><th>도매처</th><th>발주 전달</th><th>마감</th><th>최소발주</th><th>예상일정</th><th>연결상품</th><th>양식</th><th>상태</th><th>관리</th></tr></thead><tbody>{suppliers.map(s=><tr key={s.id}><td><b>{s.name}</b><small className="subText">{s.contact}</small></td><td>{s.method}<small className="subText">{s.shareTarget||"대상 미설정"}</small><small className="subText">자동전송 {s.dispatchEnabled===false?"끔":"켬"}</small></td><td>발주 {s.orderDeadline}<small className="subText">송장 {s.invoiceDeadline}</small></td><td>{s.minOrderQty||1}개<small className="subText">{money(s.minOrderAmount||0)}</small></td><td>출고 +{s.shipLeadDays||1}일<small className="subText">도착 +{(s.shipLeadDays||1)+(s.deliveryLeadDays||2)}일</small></td><td>{products.filter(p=>p.supplier===s.name||p.alternateSupplier===s.name).length}개</td><td>{s.orderSheetName||"발주서"}<small className="subText">{s.orderFileName}</small></td><td><Tag>{s.active?"사용중":"중지"}</Tag></td><td className="actions"><button className="secondary" onClick={()=>edit(s)}>수정</button><button className="secondary" onClick={()=>setSuppliers(p=>p.map(x=>x.id===s.id?{...x,active:!x.active}:x))}>{s.active?"중지":"사용"}</button></td></tr>)}</tbody></table></div></div></>;
 }
 
 function ProductLinkPage({ products, setProducts, suppliers, productFilter }) {
@@ -1407,15 +1500,16 @@ function CSPage({ orders, suppliers, invoices, inquiries, setInquiries, returnCa
   );
 }
 
-function SettingsPage({ settings,setSettings,orders,products,suppliers,invoices,purchaseBatches,inquiries,returnCases,csLogs,invoiceLogs,activityLogs,notifications,marketingLogs,setOrders,setProducts,setSuppliers,setInvoices,setPurchaseBatches,setInquiries,setReturnCases,setCsLogs,setInvoiceLogs,setActivityLogs,setNotifications,setMarketingLogs,pushNotification,autoBackups,setAutoBackups,undoStack,undoLast }) {
+function SettingsPage({ settings,setSettings,orders,products,suppliers,invoices,purchaseBatches,purchaseDispatches,setPurchaseDispatches,inquiries,returnCases,csLogs,invoiceLogs,activityLogs,notifications,marketingLogs,setOrders,setProducts,setSuppliers,setInvoices,setPurchaseBatches,setInquiries,setReturnCases,setCsLogs,setInvoiceLogs,setActivityLogs,setNotifications,setMarketingLogs,pushNotification,autoBackups,setAutoBackups,undoStack,undoLast }) {
   const restoreRef=useRef(null); const requestNotifications=async()=>{if(!("Notification" in window))return alert("알림 미지원");const permission=await Notification.requestPermission();setSettings(p=>({...p,browserNotifications:permission==="granted"}));};
-  const payload=()=>({version:DATA_VERSION,exportedAt:nowIso(),orders,products,suppliers,invoices,purchaseBatches,inquiries,returnCases,csLogs,invoiceLogs,activityLogs,notifications,marketingLogs,settings});
+  const testDispatchServer=async()=>{try{const r=await fetch("/api/dispatch-health");const d=await r.json();alert(d.configured?`자동전송 서버 준비됨\nProvider: ${d.provider||"webhook"}`:`자동전송 서버 미설정\nVercel 환경변수 설정이 필요합니다.`)}catch{alert("자동전송 서버에 연결할 수 없습니다.")}};
+  const payload=()=>({version:DATA_VERSION,exportedAt:nowIso(),orders,products,suppliers,invoices,purchaseBatches,purchaseDispatches,inquiries,returnCases,csLogs,invoiceLogs,activityLogs,notifications,marketingLogs,settings});
   const backup=()=>saveBlob(new Blob([JSON.stringify(payload(),null,2)],{type:"application/json"}),`SellerFlow_backup_${new Date().toISOString().slice(0,10)}.json`);
-  const restore=async file=>{if(!file)return;try{const d=JSON.parse(await file.text());if(!d.orders||!d.products||!d.suppliers)throw new Error();setOrders(d.orders);setProducts(d.products);setSuppliers(d.suppliers);setInvoices(d.invoices||[]);setPurchaseBatches(d.purchaseBatches||[]);setInquiries(d.inquiries||[]);setReturnCases(d.returnCases||[]);setCsLogs(d.csLogs||[]);setInvoiceLogs(d.invoiceLogs||[]);setActivityLogs(d.activityLogs||[]);setNotifications(d.notifications||[]);setMarketingLogs(d.marketingLogs||[]);setSettings({...defaultSettings,...(d.settings||{}),dataVersion:DATA_VERSION});alert("백업 복원 완료")}catch{alert("SellerFlow 백업 파일이 아닙니다.")} if(restoreRef.current)restoreRef.current.value=""};
+  const restore=async file=>{if(!file)return;try{const d=JSON.parse(await file.text());if(!d.orders||!d.products||!d.suppliers)throw new Error();setOrders(d.orders);setProducts(d.products);setSuppliers(d.suppliers);setInvoices(d.invoices||[]);setPurchaseBatches(d.purchaseBatches||[]);setPurchaseDispatches(d.purchaseDispatches||[]);setInquiries(d.inquiries||[]);setReturnCases(d.returnCases||[]);setCsLogs(d.csLogs||[]);setInvoiceLogs(d.invoiceLogs||[]);setActivityLogs(d.activityLogs||[]);setNotifications(d.notifications||[]);setMarketingLogs(d.marketingLogs||[]);setSettings({...defaultSettings,...(d.settings||{}),dataVersion:DATA_VERSION});alert("백업 복원 완료")}catch{alert("SellerFlow 백업 파일이 아닙니다.")} if(restoreRef.current)restoreRef.current.value=""};
   const integrityCheck=()=>{const issues=[];orders.forEach(o=>{if(!products.some(p=>p.name===o.product))issues.push(`${o.id}: 상품 데이터 없음`);if(o.purchaseStatus==="발주완료"&&!o.marketing&&!invoices.some(r=>r.id===o.id))issues.push(`${o.id}: 운송장 행 없음`);if(o.supplier!=="미연결"&&!suppliers.some(s=>s.name===o.supplier))issues.push(`${o.id}: 없는 도매처 ${o.supplier}`)});const dup={};invoices.forEach(r=>{if(r.invoice)dup[r.invoice]=(dup[r.invoice]||0)+1});Object.entries(dup).filter(([,n])=>n>1).forEach(([x])=>issues.push(`중복 송장 ${x}`));alert(issues.length?`점검 ${issues.length}건\n\n${issues.slice(0,15).join("\n")}`:"데이터 무결성 이상 없음")};
-  const restoreAuto=s=>{if(!confirm("이 자동 백업 시점으로 복구할까요?"))return;const d=s.data;setOrders(d.orders||[]);setProducts(d.products||[]);setSuppliers(d.suppliers||[]);setInvoices(d.invoices||[]);setPurchaseBatches(d.purchaseBatches||[]);setInquiries(d.inquiries||[]);setReturnCases(d.returnCases||[]);setCsLogs(d.csLogs||[]);setInvoiceLogs(d.invoiceLogs||[]);setActivityLogs(d.activityLogs||[]);setNotifications(d.notifications||[]);setMarketingLogs(d.marketingLogs||[]);setSettings({...defaultSettings,...(d.settings||{}),dataVersion:DATA_VERSION});alert("자동 백업 복구 완료")};
+  const restoreAuto=s=>{if(!confirm("이 자동 백업 시점으로 복구할까요?"))return;const d=s.data;setOrders(d.orders||[]);setProducts(d.products||[]);setSuppliers(d.suppliers||[]);setInvoices(d.invoices||[]);setPurchaseBatches(d.purchaseBatches||[]);setPurchaseDispatches(d.purchaseDispatches||[]);setInquiries(d.inquiries||[]);setReturnCases(d.returnCases||[]);setCsLogs(d.csLogs||[]);setInvoiceLogs(d.invoiceLogs||[]);setActivityLogs(d.activityLogs||[]);setNotifications(d.notifications||[]);setMarketingLogs(d.marketingLogs||[]);setSettings({...defaultSettings,...(d.settings||{}),dataVersion:DATA_VERSION});alert("자동 백업 복구 완료")};
   return <><PageHead title="설정" description="테마·역할·운영모드·API 상태·안전장치·개인정보·백업·알림을 관리합니다."/>
-  <div className="panel"><h2>운영 모드 / 권한</h2><div className="formGrid"><Field label="현재 역할"><select value={settings.currentRole} onChange={e=>setSettings({...settings,currentRole:e.target.value})}><option>관리자</option><option>발주 담당</option><option>CS 담당</option><option>조회 전용</option></select></Field><Field label="시스템 모드"><select value={settings.systemMode} onChange={e=>setSettings({...settings,systemMode:e.target.value})}><option>테스트</option><option>실운영 준비</option></select></Field><Field label="화면 테마"><select value={settings.theme || "system"} onChange={e=>setSettings({...settings,theme:e.target.value})}><option value="system">시스템 설정</option><option value="light">라이트</option><option value="dark">다크</option></select></Field><Field label="API 상태"><input readOnly value={settings.apiOutage?"장애모드":settings.wingStatus||"미연결"}/></Field><Field label="마지막 동기화"><input readOnly value={settings.apiLastSyncAt?new Date(settings.apiLastSyncAt).toLocaleString("ko-KR"):"아직 없음"}/></Field><Field label="API 성공률"><input readOnly value={`${Number(settings.apiSuccessRate||0)}%`}/></Field><Field label="자동 재시도 횟수"><input type="number" min="0" max="5" value={settings.retryLimit} onChange={e=>setSettings({...settings,retryLimit:Number(e.target.value)})}/></Field><Field label="고가 주문 확인 기준"><input type="number" value={settings.highValueThreshold} onChange={e=>setSettings({...settings,highValueThreshold:Number(e.target.value)})}/></Field><Field label="다량 주문 확인 기준"><input type="number" value={settings.bulkQtyThreshold} onChange={e=>setSettings({...settings,bulkQtyThreshold:Number(e.target.value)})}/></Field></div><div className="formActions left"><button className={settings.apiOutage?"dangerButton":"secondary"} onClick={()=>setSettings({...settings,apiOutage:!settings.apiOutage})}>{settings.apiOutage?"API 장애모드 해제":"API 장애모드 켜기"}</button><button className="secondary" onClick={()=>setSettings({...settings,apiLastSyncAt:nowIso(),apiSuccessRate:100,wingStatus:"연결 테스트 통과(데모)"})}>API 상태 테스트(데모)</button></div><p className="securityNote">실운영 준비를 선택해도 현재 MVP는 실제 Coupang WING으로 주문/송장을 전송하지 않습니다. API Secret은 브라우저에 저장하지 않습니다.</p></div>
+  <div className="panel"><h2>운영 모드 / 권한</h2><div className="formGrid"><Field label="현재 역할"><select value={settings.currentRole} onChange={e=>setSettings({...settings,currentRole:e.target.value})}><option>관리자</option><option>발주 담당</option><option>CS 담당</option><option>조회 전용</option></select></Field><Field label="시스템 모드"><select value={settings.systemMode} onChange={e=>setSettings({...settings,systemMode:e.target.value})}><option>테스트</option><option>실운영 준비</option></select></Field><Field label="화면 테마"><select value={settings.theme || "system"} onChange={e=>setSettings({...settings,theme:e.target.value})}><option value="system">시스템 설정</option><option value="light">라이트</option><option value="dark">다크</option></select></Field><Field label="API 상태"><input readOnly value={settings.apiOutage?"장애모드":settings.wingStatus||"미연결"}/></Field><Field label="마지막 동기화"><input readOnly value={settings.apiLastSyncAt?new Date(settings.apiLastSyncAt).toLocaleString("ko-KR"):"아직 없음"}/></Field><Field label="API 성공률"><input readOnly value={`${Number(settings.apiSuccessRate||0)}%`}/></Field><Field label="자동 재시도 횟수"><input type="number" min="0" max="5" value={settings.retryLimit} onChange={e=>setSettings({...settings,retryLimit:Number(e.target.value)})}/></Field><Field label="고가 주문 확인 기준"><input type="number" value={settings.highValueThreshold} onChange={e=>setSettings({...settings,highValueThreshold:Number(e.target.value)})}/></Field><Field label="다량 주문 확인 기준"><input type="number" value={settings.bulkQtyThreshold} onChange={e=>setSettings({...settings,bulkQtyThreshold:Number(e.target.value)})}/></Field><Field label="발주 자동전송"><select value={settings.autoPurchaseDispatch?"켜기":"끄기"} onChange={e=>setSettings({...settings,autoPurchaseDispatch:e.target.value==="켜기"})}><option>켜기</option><option>끄기</option></select></Field><Field label="자동전송 재시도"><input type="number" min="1" max="5" value={settings.purchaseDispatchRetryLimit||3} onChange={e=>setSettings({...settings,purchaseDispatchRetryLimit:Number(e.target.value)})}/></Field><Field label="전송 API 경로"><input value={settings.purchaseDispatchEndpoint||"/api/purchase-dispatch"} onChange={e=>setSettings({...settings,purchaseDispatchEndpoint:e.target.value})}/></Field></div><div className="formActions left"><button className={settings.apiOutage?"dangerButton":"secondary"} onClick={()=>setSettings({...settings,apiOutage:!settings.apiOutage})}>{settings.apiOutage?"API 장애모드 해제":"API 장애모드 켜기"}</button><button className="secondary" onClick={()=>setSettings({...settings,apiLastSyncAt:nowIso(),apiSuccessRate:100,wingStatus:"연결 테스트 통과(데모)"})}>API 상태 테스트(데모)</button><button className="secondary" onClick={testDispatchServer}>발주 자동전송 서버 테스트</button></div><p className="securityNote">실운영 준비를 선택해도 현재 MVP는 실제 Coupang WING으로 주문/송장을 전송하지 않습니다. API Secret은 브라우저에 저장하지 않습니다.</p></div>
   <div className="panel"><h2>개인정보 / 보관 정책</h2><div className="formGrid"><Field label="목록 개인정보 마스킹"><select value={settings.privacyMasking?"사용":"해제"} onChange={e=>setSettings({...settings,privacyMasking:e.target.value==="사용"})}><option>사용</option><option>해제</option></select></Field><Field label="보관기간(일)"><input type="number" min="30" value={settings.dataRetentionDays} onChange={e=>setSettings({...settings,dataRetentionDays:Number(e.target.value)})}/></Field><Field label="자동 정리"><select value={settings.autoRetentionCleanup?"사용":"해제"} onChange={e=>setSettings({...settings,autoRetentionCleanup:e.target.value==="사용"})}><option>해제</option><option>사용</option></select></Field><Field label="자동 백업 간격(분)"><input type="number" min="1" value={settings.autoBackupMinutes} onChange={e=>setSettings({...settings,autoBackupMinutes:Number(e.target.value)})}/></Field></div></div>
   <div className="panel"><h2>보내는 사람</h2><div className="formGrid"><Field label="이름"><input value={settings.senderName} onChange={e=>setSettings({...settings,senderName:e.target.value})}/></Field><Field label="전화번호"><input value={settings.senderPhone} onChange={e=>setSettings({...settings,senderPhone:e.target.value})}/></Field><Field label="주소"><input value={settings.senderAddress} onChange={e=>setSettings({...settings,senderAddress:e.target.value})}/></Field></div></div>
   <div className="panel"><h2>알림</h2><div className="toggleGrid">{[["notifyOrderImport","주문 가져오기"],["notifyInvoiceDeadline","송장 마감"],["notifyCsRisk","CS 위험"],["notifyPurchaseDelay","발주 지연"],["notifyInvoiceMatchFail","송장 실패"],["notifyRegisterDone","등록 완료"]].map(([k,l])=><label key={k}><input type="checkbox" checked={Boolean(settings[k])} onChange={e=>setSettings({...settings,[k]:e.target.checked})}/> {l}</label>)}</div><div className="formActions left"><button className="secondary" onClick={requestNotifications}>브라우저 알림 권한</button><button className="secondary" onClick={()=>pushNotification("테스트 알림","SellerFlow 알림 정상","대시보드")}>알림 테스트</button></div></div>
