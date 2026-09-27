@@ -276,6 +276,15 @@
       );
     }
   }
-
+setInterval(() => {
+  if (document.visibilityState !== "hidden") {
+    saveNow().catch((error) => {
+      console.warn(
+        "SellerFlow server backup skipped:",
+        error?.code || error?.message || error
+      );
+    });
+  }
+}, 10000);
   boot();
 })();
