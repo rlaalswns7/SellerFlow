@@ -6,7 +6,7 @@ const MAX_STATE_BYTES = 2500000;
 function config() {
   return {
     url: String(process.env.SUPABASE_URL || "").replace(/\/+$/, ""),
-    key: String(process.env.SUPABASE_SERVICE_ROLE_KEY || ""),
+    key: String(process.env.SUPABASE_SECRET_KEY || ""),
   };
 }
 
