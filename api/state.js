@@ -11,12 +11,18 @@ function config() {
 }
 
 function headers(key, extra = {}) {
-  return {
+  const base = {
     apikey: key,
-    Authorization: `Bearer ${key}`,
     "Content-Type": "application/json",
     ...extra,
   };
+
+  // 구형 service_role JWT일 때만 Authorization 사용
+  if (!String(key).startsWith("sb_secret_")) {
+    base.Authorization = `Bearer ${key}`;
+  }
+
+  return base;
 }
 
 export default async function handler(req, res) {
