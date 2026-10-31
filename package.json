@@ -1,7 +1,7 @@
 {
   "name": "sellerflow-mvp-v5",
   "private": true,
-  "version": "7.1.0",
+  "version": "7.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,7 +13,7 @@
     "vite": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "xlsx": "^0.18.5",
-    "jszip": "^3.10.1"
+    "jszip": "^3.10.1",
+    "xlsx-js-style": "^1.2.0"
   }
 }
