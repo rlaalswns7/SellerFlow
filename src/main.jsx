@@ -230,7 +230,15 @@ function loadStored(key, fallback) {
 function usePersistentState(key, fallback) {
   const [state, setState] = useState(() => loadStored(key, fallback));
   useEffect(() => {
-    localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(state));
+    try {
+      localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(state));
+    } catch (error) {
+      console.error("SellerFlow 저장 실패:", key, error);
+      if (!window.__sellerFlowStorageWarning) {
+        window.__sellerFlowStorageWarning = true;
+        alert("브라우저 저장에 실패했습니다. 최근 변경이 저장되지 않았을 수 있습니다. 설정에서 JSON 백업을 받아 주세요. 오류 항목: " + key);
+      }
+    }
   }, [key, state]);
   return [state, setState];
 }
@@ -1528,7 +1536,7 @@ function CSPage({ orders, suppliers, invoices, inquiries, setInquiries, returnCa
   const [range, setRange] = useState(7);
   const [selectedCaseId, setSelectedCaseId] = useState(null);
   const selectedCase = returnCases.find((c) => c.id === selectedCaseId);
-  const within = (iso) => daysAgo(iso) < range;
+  const within = (iso) => range === 0 || daysAgo(iso) < range;
   const rangeInquiries = inquiries.filter((q) => within(q.createdAt));
   const rangeCases = returnCases.filter((c) => within(c.createdAt));
   const stats = { inquiry: rangeInquiries.length, return: rangeCases.filter((c) => c.caseType === "반품").length, cancel: rangeCases.filter((c) => c.caseType === "취소").length, pending: rangeCases.filter((c) => !c.processed).length };
@@ -1585,14 +1593,62 @@ function CSPage({ orders, suppliers, invoices, inquiries, setInquiries, returnCa
     log("처리 완료", item, `${item.resolution || "처리"}완료(테스트)`);
   };
 
+  const evidenceCasesRef = useRef(returnCases);
+  evidenceCasesRef.current = returnCases;
+  const evidenceBusyRef = useRef(false);
   const addImages = async (item, files) => {
-    const images = await Promise.all(Array.from(files || []).slice(0, 3).map((file) => new Promise((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.readAsDataURL(file); })));
-    setReturnCases((prev) => prev.map((c) => c.id === item.id ? { ...c, evidenceImages: [...(c.evidenceImages || []), ...images].slice(0, 5) } : c));
+    const picked = Array.from(files || []);
+    if (!picked.length || evidenceBusyRef.current) return;
+    evidenceBusyRef.current = true;
+    try {
+      const images = [];
+      if (picked.length > 3) throw new Error("한 번에 사진 3장까지 선택해 주세요.");
+      for (const file of picked) {
+        if (file.size > 20 * 1024 * 1024) throw new Error("20MB 이하 사진을 선택해 주세요.");
+        const image = new Image();
+        const url = URL.createObjectURL(file);
+        try {
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error("사진 읽기 시간 초과")), 20000);
+            image.onload = () => { clearTimeout(timer); resolve(); };
+            image.onerror = () => { clearTimeout(timer); reject(new Error("사진을 읽을 수 없습니다. JPG 또는 PNG로 다시 선택해 주세요.")); };
+            image.src = url;
+          });
+          const canvas = document.createElement("canvas");
+          const scale = Math.min(1, 1280 / Math.max(image.naturalWidth, image.naturalHeight));
+          canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+          const ctx = canvas.getContext("2d");
+          if (!ctx) throw new Error("사진 변환을 시작하지 못했습니다.");
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+          let data = "";
+          for (const quality of [0.8, 0.65, 0.5, 0.35]) {
+            data = canvas.toDataURL("image/jpeg", quality);
+            if (data.length <= 280000) break;
+          }
+          if (!data.startsWith("data:image/jpeg;") || data.length > 280000) throw new Error("더 작은 사진으로 다시 선택해 주세요.");
+          images.push(data);
+        } finally { image.onload = null; image.onerror = null; image.src = ""; URL.revokeObjectURL(url); }
+      }
+      const current = evidenceCasesRef.current;
+      const target = current.find(c => c.id === item.id);
+      if (!target) throw new Error("해당 CS 건을 찾지 못했습니다.");
+      const combined = [...(target.evidenceImages || []), ...images];
+      if (combined.length > 5) throw new Error("CS 한 건당 사진 5장까지 첨부할 수 있습니다.");
+      const next = current.map(c => c.id === item.id ? { ...c, evidenceImages: combined } : c);
+      try { localStorage.setItem(STORAGE_PREFIX + "cs_returns", JSON.stringify(next)); }
+      catch { throw new Error("저장 공간이 부족하거나 브라우저가 저장을 차단했습니다. 새 사진은 추가하지 않았습니다."); }
+      evidenceCasesRef.current = next;
+      setReturnCases(next);
+    } catch (error) { alert(error.message || "사진 첨부에 실패했습니다."); }
+    finally { evidenceBusyRef.current = false; }
   };
 
   return (
     <>
-      <PageHead title="CS 관리" description="문의·반품·취소를 기간별로 집계하고, 단순변심만 자동 처리합니다." actions={<div className="tabs">{[1, 7, 15, 30].map((n) => <button key={n} className={range === n ? "on" : ""} onClick={() => setRange(n)}>{n === 1 ? "오늘" : `${n}일`}</button>)}</div>} />
+      <PageHead title="CS 관리" description="문의·반품·취소를 기간별로 집계하고, 단순변심만 자동 처리합니다." actions={<div className="tabs">{[0, 1, 7, 15, 30].map((n) => <button key={n} className={range === n ? "on" : ""} onClick={() => setRange(n)}>{n === 0 ? "전체" : n === 1 ? "오늘" : `${n}일`}</button>)}</div>} />
       <div className="cards"><MiniStat title="문의" value={stats.inquiry} /><MiniStat title="반품" value={stats.return} /><MiniStat title="취소" value={stats.cancel} /><MiniStat title="처리대기" value={stats.pending} /></div>
       <div className="panel"><div className="panelHead"><div><h2>고객 문의</h2><p>마감 임박 순</p></div></div><div className="table"><table><thead><tr><th>문의</th><th>주문</th><th>상품</th><th>내용</th><th>마감</th><th>상태</th><th>작업</th></tr></thead><tbody>{[...rangeInquiries].sort((a, b) => (a.deadline === "오늘" ? -1 : 1) - (b.deadline === "오늘" ? -1 : 1)).map((q) => <tr key={q.id}><td><b>{q.id}</b></td><td>{q.orderId}</td><td>{q.product}</td><td>{q.content}<small className="subText">{q.answer && `답변: ${q.answer}`}</small></td><td>{q.deadline}{q.deadline === "오늘" && q.status !== "답변완료" && <span className="dangerText"> 마감 임박</span>}</td><td><Tag>{q.status}</Tag></td><td><button className="secondary" onClick={() => reply(q)} disabled={q.status === "답변완료"}>{q.status === "답변완료" ? "답변완료" : "답변"}</button></td></tr>)}</tbody></table></div></div>
       <div className="panel"><div className="panelHead"><div><h2>반품·취소</h2><p>단순변심 자동 / 품질·오배송·파손·사기의심 수동</p></div></div><div className="table"><table><thead><tr><th>접수</th><th>종류</th><th>주문</th><th>사유</th><th>도매처</th><th>출고</th><th>상태</th><th>작업</th></tr></thead><tbody>{rangeCases.map((item) => <tr key={item.id}><td><b>{item.id}</b></td><td>{item.caseType}</td><td>{item.orderId}</td><td>{item.reason}</td><td>{item.supplier || orderFor(item.orderId)?.supplier || "-"}</td><td>{item.shipped ? "출고됨" : "출고 전"}</td><td><Tag>{item.status}</Tag></td><td className="actions"><button className="secondary" disabled={item.processed} onClick={() => item.reason === "단순변심" ? handleCase(item) : item.resolution ? completeManual(item) : handleCase(item)}>{item.processed ? "처리완료" : item.reason === "단순변심" ? "자동처리" : item.resolution ? `${item.resolution} 완료처리` : "수동검토"}</button><button className="secondary" onClick={() => setSelectedCaseId(item.id)}>상세보기</button></td></tr>)}</tbody></table></div></div>
