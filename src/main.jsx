@@ -940,6 +940,13 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   const [selected, setSelected] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [sharingKey, setSharingKey] = useState("");
+  const dispatchRecordsRef = useRef(purchaseDispatches);
+  dispatchRecordsRef.current = purchaseDispatches;
+  const dispatchBusyRef = useRef(new Set());
+  const dispatchLimit = Math.min(5, Math.max(1, Math.floor(Number(settings.purchaseDispatchRetryLimit) || 3)));
+  const deliveryConfirmed = (info) => ["전달완료", "자동전송완료"].includes(info.status);
+  const deliveryLabel = (info) => info.status === "공유완료" ? "과거 완료기록 · 전달 미확인" : (info.status || "미전송");
+
   const eligible = orders.filter((o) => !o.marketing && !o.hold && o.supplier !== "미연결" && o.purchaseStatus === "발주대기");
 
   const toggle = (id) => setSelected((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -1037,19 +1044,35 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   };
 
   const upsertDispatch = (record) => {
-    setPurchaseDispatches((prev) => {
-      const exists = prev.some((item) => item.id === record.id);
-      const next = exists ? prev.map((item) => item.id === record.id ? { ...item, ...record } : item) : [record, ...prev];
-      return next.slice(0, 200);
-    });
+    const prev = dispatchRecordsRef.current;
+    const exists = prev.some((item) => item.id === record.id);
+    const next = (exists ? prev.map((item) => item.id === record.id ? { ...item, ...record } : item) : [record, ...prev]).slice(0, 200);
+    dispatchRecordsRef.current = next;
+    setPurchaseDispatches(next);
   };
 
   const dispatchSupplierFile = async (batchId, supplierName, items, retry = false) => {
     const supplier = suppliers.find((s) => s.name === supplierName);
     const dispatchId = `${batchId}:${supplierName}`;
-    const previous = purchaseDispatches.find((item) => item.id === dispatchId);
-    const attempt = retry ? Number(previous?.attempt || 0) + 1 : 1;
-    const maxRetry = Math.max(1, Number(settings.purchaseDispatchRetryLimit || 3));
+    const previous = dispatchRecordsRef.current.find((item) => item.id === dispatchId);
+    if (dispatchBusyRef.current.has(dispatchId)) return { ok: false, blocked: true };
+    if (["전송완료", "테스트완료", "전송중"].includes(previous?.status)) {
+      alert("이미 완료됐거나 전송 중인 건입니다. 중복 요청하지 않습니다.");
+      return { ok: false, blocked: true };
+    }
+    const batch = purchaseBatches.find((b) => b.id === batchId);
+    if (batch && deliveryConfirmed(deliveryInfo(batch, supplierName))) {
+      alert("이미 전달완료로 기록된 건입니다. 중복 요청하지 않습니다.");
+      return { ok: false, blocked: true };
+    }
+    const attempt = Math.max(0, Number(previous?.attempt) || 0) + 1;
+    const maxRetry = dispatchLimit;
+    if (attempt > maxRetry) {
+      alert(`전송 시도 한도 ${maxRetry}회에 도달했습니다. 전송 이력을 확인하세요.`);
+      return { ok: false, blocked: true };
+    }
+    dispatchBusyRef.current.add(dispatchId);
+    try {
     if (settings.systemMode === "테스트") {
       const { filename } = makeSupplierFile(supplierName, items);
       upsertDispatch({ id: dispatchId, batchId, supplierName, status: "테스트완료", attempt,
@@ -1087,6 +1110,9 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
       pushNotification("발주 자동전송 실패", `${supplierName} · ${error?.message || "서버 연결 실패"}`, "발주 관리", "danger");
       return { ok: false, error };
     }
+    } finally {
+      dispatchBusyRef.current.delete(dispatchId);
+    }
   };
 
   const retryDispatch = async (item) => {
@@ -1105,6 +1131,21 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
         [supplierName]: { ...deliveryInfo(batch, supplierName), status, ...extra },
       },
     } : batch));
+  };
+
+  const confirmSupplierDelivery = (batch, supplierName) => {
+    const info = deliveryInfo(batch, supplierName);
+    if (deliveryConfirmed(info)) return;
+    const test = settings.systemMode === "테스트";
+    const question = test
+      ? `${supplierName} · ${batch.id}\n테스트용 전달 확인을 기록할까요? 실제 도매처 전달완료로 처리하지 않습니다.`
+      : `${supplierName} · ${batch.id}\n해당 오픈채팅방에 올바른 발주서와 메시지를 실제로 전송했나요? 파일 저장이나 공유창 열기만 했다면 취소하세요.`;
+    if (!window.confirm(question)) return;
+    markDelivery(batch.id, supplierName, test ? "전달확인(테스트)" : "전달완료", {
+      sentAt: test ? "" : nowIso(), confirmedAt: nowIso(),
+      confirmationMode: test ? "test" : "manual", method: test ? "테스트" : "수동 전달 확인",
+    });
+    pushActivity(test ? "발주 전달 확인 테스트" : "도매처 전달 수동 확인", `${batch.id} · ${supplierName}`);
   };
 
   const copyShareMessage = async (batch, supplierName) => {
@@ -1140,8 +1181,11 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
       const canShareFiles = Boolean(navigator.share) && (!navigator.canShare || navigator.canShare(shareData));
       if (canShareFiles) {
         await navigator.share(shareData);
-        markDelivery(batch.id, supplierName, "공유완료", { sentAt: nowIso(), method: supplier?.method || "공유" });
-        pushActivity("도매처 발주 공유", `${batch.id} · ${supplierName} · ${items.length}건 공유 완료`);
+        if (!deliveryConfirmed(deliveryInfo(batch, supplierName))) {
+          markDelivery(batch.id, supplierName, "전달확인필요", { sentAt: "", sharedAt: nowIso(), method: supplier?.method || "공유" });
+        }
+        pushActivity("발주서 공유창 작업 종료", `${batch.id} · ${supplierName} · 실제 전달 여부 별도 확인 필요`);
+        alert("공유창 작업이 끝났습니다. 파일 저장만으로는 전달완료가 아닙니다. 오픈채팅방에서 실제 전송한 뒤 전달 확인을 눌러주세요.");
       } else {
         saveBlob(blob, filename);
         try { await navigator.clipboard.writeText(text); } catch {}
@@ -1236,12 +1280,12 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
       </tbody></table></div></div>
 
       <div className="panel dispatchQueue"><div className="panelHead"><div><h2>자동 발주 전송 큐</h2><p>발주서 생성 직후 도매처별 파일을 서버 전송 큐로 보내고 성공·실패·재시도를 기록합니다.</p></div><span className="muted">자동전송 {settings.autoPurchaseDispatch ? "켜짐" : "꺼짐"}</span></div>
-        {purchaseDispatches.length === 0 ? <div className="emptyLine">아직 자동 전송 기록이 없습니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>상태</th><th>시도</th><th>최근 결과</th><th>작업</th></tr></thead><tbody>{purchaseDispatches.slice(0,20).map((item)=><tr key={item.id}><td><b>{item.batchId}</b></td><td>{item.supplierName}</td><td><span className={`dispatchStatus ${item.status === "전송완료" ? "sent" : item.status.includes("실패") || item.status === "설정필요" ? "failed" : "pending"}`}>{item.status}</span></td><td>{item.attempt || 0}/{settings.purchaseDispatchRetryLimit || 3}</td><td>{item.message || "-"}<small className="subText">{item.updatedAt ? new Date(item.updatedAt).toLocaleString("ko-KR") : ""}</small></td><td>{!["전송완료", "테스트완료"].includes(item.status) && <button className="secondary" onClick={()=>retryDispatch(item)}>재시도</button>}</td></tr>)}</tbody></table></div>}
+        {purchaseDispatches.length === 0 ? <div className="emptyLine">아직 자동 전송 기록이 없습니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>상태</th><th>시도</th><th>최근 결과</th><th>작업</th></tr></thead><tbody>{purchaseDispatches.slice(0,20).map((item)=><tr key={item.id}><td><b>{item.batchId}</b></td><td>{item.supplierName}</td><td><span className={`dispatchStatus ${item.status === "전송완료" ? "sent" : item.status.includes("실패") || item.status === "설정필요" ? "failed" : "pending"}`}>{item.status}</span></td><td>{item.attempt || 0}/{dispatchLimit}</td><td>{item.message || "-"}<small className="subText">{item.updatedAt ? new Date(item.updatedAt).toLocaleString("ko-KR") : ""}</small></td><td>{!["전송완료", "테스트완료"].includes(item.status) && <button className="secondary" disabled={item.status === "전송중" || Number(item.attempt || 0) >= dispatchLimit || deliveryConfirmed(deliveryInfo(purchaseBatches.find(b=>b.id===item.batchId) || {}, item.supplierName))} onClick={()=>retryDispatch(item)}>{Number(item.attempt || 0) >= dispatchLimit ? "시도 한도 도달" : "재시도"}</button>}</td></tr>)}</tbody></table></div>}
         <p className="securityNote">브라우저에는 API Secret을 저장하지 않습니다. 실제 외부 전송은 Vercel 서버의 환경변수로 연결한 전송 어댑터가 처리합니다.</p>
       </div>
 
-      <div className="panel supplierDeliveryPanel"><div className="panelHead"><div><h2>도매처 전송센터</h2><p>ZIP 전체가 아니라 각 도매처의 전용 XLSX만 공유합니다. iPad/모바일에서는 공유 버튼으로 카카오톡 공유창을 바로 열 수 있습니다.</p></div></div>
-        {deliveryRows.length === 0 ? <div className="emptyLine">발주서를 생성하면 도매처별 전송 작업이 여기에 나타납니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>주문수</th><th>전달방식</th><th>대상</th><th>전송상태</th><th>작업</th></tr></thead><tbody>{deliveryRows.map(({batch,supplierName,items,info,supplier}) => { const key=`${batch.id}-${supplierName}`; return <tr key={key}><td><b>{batch.id}</b><small className="subText">{new Date(batch.createdAt).toLocaleString("ko-KR")}</small></td><td><b>{supplierName}</b></td><td>{items.length}건</td><td>{supplier?.method || info.method || "수동"}</td><td>{supplier?.shareTarget || "미설정"}</td><td><span className={`deliveryStatus ${info.status === "공유완료" ? "sent" : "pending"}`}>{info.status || "미전송"}</span>{info.sentAt && <small className="subText">{new Date(info.sentAt).toLocaleString("ko-KR")}</small>}</td><td className="actions"><button className="primary" disabled={sharingKey===key} onClick={()=>shareSupplierFile(batch,supplierName)}>{sharingKey===key?"공유 중...":info.status==="공유완료"?"다시 공유":"공유"}</button><button className="secondary" onClick={()=>downloadSupplierFile(batch,supplierName)}>파일</button><button className="secondary" onClick={()=>copyShareMessage(batch,supplierName)}>메시지</button>{info.status!=="공유완료"&&<button className="secondary" onClick={()=>markDelivery(batch.id,supplierName,"공유완료",{sentAt:nowIso(),method:supplier?.method||"수동"})}>완료표시</button>}</td></tr>; })}</tbody></table></div>}
+      <div className="panel supplierDeliveryPanel"><div className="panelHead"><div><h2>도매처 전송센터</h2><p>ZIP 전체가 아니라 각 도매처의 전용 XLSX만 공유합니다. 오픈채팅은 파일을 저장한 뒤 채팅방 안에서 첨부하세요. 공유창 작업과 실제 전달 확인은 별도로 기록합니다.</p></div></div>
+        {deliveryRows.length === 0 ? <div className="emptyLine">발주서를 생성하면 도매처별 전송 작업이 여기에 나타납니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>주문수</th><th>전달방식</th><th>대상</th><th>전송상태</th><th>작업</th></tr></thead><tbody>{deliveryRows.map(({batch,supplierName,items,info,supplier}) => { const key=`${batch.id}-${supplierName}`; return <tr key={key}><td><b>{batch.id}</b><small className="subText">{new Date(batch.createdAt).toLocaleString("ko-KR")}</small></td><td><b>{supplierName}</b></td><td>{items.length}건</td><td>{supplier?.method || info.method || "수동"}</td><td>{supplier?.shareTarget || "미설정"}</td><td><span className={`deliveryStatus ${deliveryConfirmed(info) ? "sent" : "pending"}`}>{deliveryLabel(info)}</span>{info.sentAt && <small className="subText">{new Date(info.sentAt).toLocaleString("ko-KR")}</small>}</td><td className="actions"><button className="primary" disabled={sharingKey===key} onClick={()=>shareSupplierFile(batch,supplierName)}>{sharingKey===key?"공유 중...":deliveryConfirmed(info)?"다시 공유":"공유"}</button><button className="secondary" onClick={()=>downloadSupplierFile(batch,supplierName)}>파일</button><button className="secondary" onClick={()=>copyShareMessage(batch,supplierName)}>메시지</button>{!deliveryConfirmed(info)&&<button className="secondary" disabled={settings.systemMode === "테스트" && info.status === "전달확인(테스트)"} onClick={()=>confirmSupplierDelivery(batch,supplierName)}>{settings.systemMode === "테스트" ? "전달 확인(테스트)" : "실제 전달 확인"}</button>}</td></tr>; })}</tbody></table></div>}
         <p className="securityNote">개인정보 보호를 위해 도매처에는 자기 주문이 들어간 XLSX만 공유하세요. 전체 ZIP을 카카오톡 방에 보내는 기능은 의도적으로 제공하지 않습니다.</p>
       </div>
 
