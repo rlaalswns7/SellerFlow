@@ -869,7 +869,14 @@ function OperationsPage({ orders, setOrders, products, suppliers, invoices, inqu
   </>;
 }
 
+function csPurchaseBlocks(cases) {
+  return new Set(cases.filter(c => c.processed && (c.resolution === "환불" ||
+    /^(출고중지·|회수없이 )?환불완료(?:\(테스트\))?$/.test(c.status || "") ||
+    /^취소완료(?:\(테스트\))?$/.test(c.status || ""))).map(c => c.orderId));
+}
+
 function OrderPage({ orders, setOrders, products, setProducts, suppliers, invoices, purchaseBatches, globalSearch, orderFilter, openPage, pushActivity, pushNotification, settings, setSettings, inquiries, returnCases }) {
+  const csBlocked = csPurchaseBlocks(returnCases);
   const [syncingCoupang, setSyncingCoupang] = useState(false);
   const [search,setSearch]=useState(""); const [selectedOrderId,setSelectedOrderId]=useState(null); const [selected,setSelected]=useState([]); const [preset,setPreset]=useState(orderFilter||"all");
   const [savedFilters,setSavedFilters]=usePersistentState("saved_order_filters",[{id:"F1",name:"미연결",preset:"unlinked"},{id:"F2",name:"오늘 발주",preset:"waiting"},{id:"F3",name:"보류",preset:"hold"},{id:"F4",name:"즐겨찾기",preset:"favorite"}]);
@@ -931,12 +938,12 @@ function OrderPage({ orders, setOrders, products, setProducts, suppliers, invoic
     <div className="securityNote"><strong>테스트 모드</strong> · 쿠팡윙 API 키가 없으면 실제 주문은 수집되지 않습니다. 아래 데모 주문은 가상 데이터이며 실제 고객·주문·결제 정보가 아닙니다.</div>
     <div className="panel filterBar"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="주문번호·고객·전화·주소·상품·도매처·송장번호 검색"/><select value={preset} onChange={e=>setPreset(e.target.value)}><option value="all">전체</option><option value="waiting">발주 대기</option><option value="unlinked">미연결</option><option value="hold">보류</option><option value="favorite">즐겨찾기</option><option value="risk">위험 주문</option><option value="marketing">마케팅</option></select><button className="secondary" onClick={saveFilter}>현재 필터 저장</button>{savedFilters.map(f=><button className="chip" key={f.id} onClick={()=>{setPreset(f.preset||"all");setSearch(f.search||"")}}>{f.name}</button>)}</div>
     {selected.length>0&&<div className="panel bulkBar"><b>{selected.length}건 선택</b><button className="secondary" onClick={()=>applyBulk("hold")}>보류</button><button className="secondary" onClick={()=>applyBulk("unhold")}>보류 해제</button><button className="secondary" onClick={()=>applyBulk("favorite")}>즐겨찾기</button><button className="secondary" onClick={bulkSupplier}>도매처 변경</button><button className="secondary" onClick={()=>applyBulk("memo")}>메모</button></div>}
-    <div className="panel"><div className="table"><table><thead><tr><th><input type="checkbox" checked={rows.length>0&&selected.length===rows.length} onChange={toggleAll}/></th><th>핀</th><th>주문번호</th><th>날짜</th><th>고객</th><th>상품</th><th>수량</th><th>금액</th><th>도매처</th><th>발주</th><th>송장</th><th>점검</th><th>작업</th></tr></thead><tbody>{rows.length?rows.map(o=>{const rr=orderRiskReasons(o,products,suppliers,invoices);return <tr key={o.id} className={o.hold?"heldRow":""}><td><input type="checkbox" checked={selected.includes(o.id)} onChange={()=>toggle(o.id)}/></td><td><button className="iconButton" onClick={()=>updateOrder(o.id,{favorite:!o.favorite},"즐겨찾기")}>{o.favorite?"★":"☆"}</button></td><td><b>{o.id}</b>{o.hold&&<small className="subText dangerText">보류</small>}</td><td>{o.date}</td><td>{o.customer}<small className="subText">{settings.privacyMasking?maskPhone(o.phone):o.phone||"-"}</small></td><td>{o.product}<small className="subText">{o.option}</small></td><td>{o.qty}</td><td>{money(o.saleAmount)}</td><td>{o.supplier}</td><td><Tag>{o.purchaseStatus}</Tag></td><td><Tag>{o.invoiceStatus}</Tag></td><td>{rr.length?<span className="severity danger">{rr.length}개</span>:<span className="okText">정상</span>}</td><td><button className="secondary" onClick={()=>setSelectedOrderId(o.id)}>상세</button></td></tr>}):<tr><td colSpan="13">주문 없음</td></tr>}</tbody></table></div></div>
+    <div className="panel"><div className="table"><table><thead><tr><th><input type="checkbox" checked={rows.length>0&&selected.length===rows.length} onChange={toggleAll}/></th><th>핀</th><th>주문번호</th><th>날짜</th><th>고객</th><th>상품</th><th>수량</th><th>금액</th><th>도매처</th><th>발주</th><th>송장</th><th>점검</th><th>작업</th></tr></thead><tbody>{rows.length?rows.map(o=>{const rr=orderRiskReasons(o,products,suppliers,invoices);return <tr key={o.id} className={o.hold?"heldRow":""}><td><input type="checkbox" checked={selected.includes(o.id)} onChange={()=>toggle(o.id)}/></td><td><button className="iconButton" onClick={()=>updateOrder(o.id,{favorite:!o.favorite},"즐겨찾기")}>{o.favorite?"★":"☆"}</button></td><td><b>{o.id}</b>{o.hold&&<small className="subText dangerText">보류</small>}</td><td>{o.date}</td><td>{o.customer}<small className="subText">{settings.privacyMasking?maskPhone(o.phone):o.phone||"-"}</small></td><td>{o.product}<small className="subText">{o.option}</small></td><td>{o.qty}</td><td>{money(o.saleAmount)}</td><td>{o.supplier}</td><td><Tag>{csBlocked.has(o.id) ? "CS 발주차단" : o.purchaseStatus}</Tag></td><td><Tag>{o.invoiceStatus}</Tag></td><td>{rr.length?<span className="severity danger">{rr.length}개</span>:<span className="okText">정상</span>}</td><td><button className="secondary" onClick={()=>setSelectedOrderId(o.id)}>상세</button></td></tr>}):<tr><td colSpan="13">주문 없음</td></tr>}</tbody></table></div></div>
     {selectedOrder&&<div className="panel orderDetailPanel"><div className="panelHead"><div><h2>주문 통합 상세</h2><p>{selectedOrder.id} · 고객/발주/송장/CS/수익/일정을 한 화면에서 확인</p></div><button className="secondary" onClick={()=>setSelectedOrderId(null)}>닫기</button></div><div className="detailGrid"><Detail label="고객" value={`${selectedOrder.customer} · ${customerRiskLabel(selectedOrder,inquiries,returnCases,orders)}`}/><Detail label="전화" value={settings.privacyMasking?maskPhone(selectedOrder.phone):selectedOrder.phone||"-"}/><Detail label="주소" value={settings.privacyMasking?maskAddress(selectedOrder.address):selectedOrder.address||"-"}/><Detail label="상품" value={`${selectedOrder.product} · ${selectedOrder.option}`}/><Detail label="예상 출고" value={expectedShip}/><Detail label="예상 도착" value={expectedDelivery}/><Detail label="도매처" value={selectedOrder.supplier}/><Detail label="송장" value={chosenInvoice?.invoice?`${chosenInvoice.carrier} ${chosenInvoice.invoice}`:"미입력"}/><Detail label="예상 순이익" value={money(Math.round(productProfit(selectedOrder,chosenProduct)))}/><Detail label="내부 메모" value={selectedOrder.internalMemo||"없음"}/><Detail label="고객 요청" value={selectedOrder.customerNote||"없음"}/><Detail label="도매처 전달" value={selectedOrder.supplierNote||"없음"}/></div><div className="formActions left"><button className="secondary" onClick={()=>{const v=prompt("고객 요청사항",selectedOrder.customerNote||"");if(v!==null)updateOrder(selectedOrder.id,{customerNote:v})}}>고객 요청 메모</button><button className="secondary" onClick={()=>{const v=prompt("도매처 전달사항",selectedOrder.supplierNote||"");if(v!==null)updateOrder(selectedOrder.id,{supplierNote:v})}}>도매처 전달 메모</button><button className="secondary" onClick={()=>{const v=prompt("내부 메모",selectedOrder.internalMemo||"");if(v!==null)updateOrder(selectedOrder.id,{internalMemo:v})}}>내부 메모</button>{chosenProduct?.automationMode==="수동검토"&&!selectedOrder.manualApproved&&<button className="primary" onClick={()=>updateOrder(selectedOrder.id,{manualApproved:true,purchaseStatus:"발주대기"},"수동 검토 승인")}>수동 검토 승인</button>}{chosenProduct?.alternateSupplier&&<button className="secondary" onClick={()=>updateOrder(selectedOrder.id,{supplierOverride:chosenProduct.alternateSupplier},"대체 도매처 적용")}>대체 도매처: {chosenProduct.alternateSupplier}</button>}</div><div className="riskBox"><b>자동 점검</b>{risks.length?<ul>{risks.map(r=><li key={r}>{r}</li>)}</ul>:<p className="okText">위험 요소 없음</p>}</div><div className="timeline"><b>주문 타임라인</b>{timeline.map((t,i)=><div className="timelineRow" key={i}><span>{new Date(t.time).toLocaleString("ko-KR")}</span><strong>{t.label}</strong></div>)}</div></div>}
   </>;
 }
 
-function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInvoices, purchaseBatches, setPurchaseBatches, purchaseDispatches, setPurchaseDispatches, settings, pushActivity, pushNotification }) {
+function PurchasePage({ returnCases, orders, setOrders, products, suppliers, invoices, setInvoices, purchaseBatches, setPurchaseBatches, purchaseDispatches, setPurchaseDispatches, settings, pushActivity, pushNotification }) {
   const [selected, setSelected] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [sharingKey, setSharingKey] = useState("");
@@ -947,7 +954,8 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   const deliveryConfirmed = (info) => ["전달완료", "자동전송완료"].includes(info.status);
   const deliveryLabel = (info) => info.status === "공유완료" ? "과거 완료기록 · 전달 미확인" : (info.status || "미전송");
 
-  const eligible = orders.filter((o) => !o.marketing && !o.hold && o.supplier !== "미연결" && o.purchaseStatus === "발주대기");
+  const blocked = csPurchaseBlocks(returnCases);
+  const eligible = orders.filter((o) => !blocked.has(o.id) && !o.marketing && !o.hold && o.supplier !== "미연결" && o.purchaseStatus === "발주대기");
 
   const toggle = (id) => setSelected((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   const toggleAll = () => setSelected(selected.length === eligible.length ? [] : eligible.map((o) => o.id));
@@ -1035,6 +1043,11 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   };
 
   const batchSupplierOrders = (batch, supplierName) => orders.filter((o) => batch.orderIds.includes(o.id) && o.supplier === supplierName);
+  const checkPurchaseBlock = (items) => {
+    if (!items.some(o => blocked.has(o.id))) return false;
+    alert("환불 또는 취소 처리된 주문이 포함돼 있어 이 도매처 발주서를 사용할 수 없습니다.");
+    return true;
+  };
   const deliveryInfo = (batch, supplierName) => batch.deliveries?.[supplierName] || { status: "미전송", sentAt: "", method: suppliers.find((s) => s.name === supplierName)?.method || "수동" };
 
   const renderShareMessage = (batch, supplierName, count) => {
@@ -1053,6 +1066,7 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
 
   const dispatchSupplierFile = async (batchId, supplierName, items, retry = false) => {
     const supplier = suppliers.find((s) => s.name === supplierName);
+    if (checkPurchaseBlock(items)) return { ok: false, blocked: true };
     const dispatchId = `${batchId}:${supplierName}`;
     const previous = dispatchRecordsRef.current.find((item) => item.id === dispatchId);
     if (dispatchBusyRef.current.has(dispatchId)) return { ok: false, blocked: true };
@@ -1134,6 +1148,7 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   };
 
   const confirmSupplierDelivery = (batch, supplierName) => {
+    if (checkPurchaseBlock(batchSupplierOrders(batch, supplierName))) return;
     const info = deliveryInfo(batch, supplierName);
     if (deliveryConfirmed(info)) return;
     const test = settings.systemMode === "테스트";
@@ -1149,6 +1164,7 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   };
 
   const copyShareMessage = async (batch, supplierName) => {
+    if (checkPurchaseBlock(batchSupplierOrders(batch, supplierName))) return;
     const items = batchSupplierOrders(batch, supplierName);
     const text = renderShareMessage(batch, supplierName, items.length);
     try {
@@ -1160,6 +1176,7 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   };
 
   const downloadSupplierFile = (batch, supplierName) => {
+    if (checkPurchaseBlock(batchSupplierOrders(batch, supplierName))) return;
     const items = batchSupplierOrders(batch, supplierName);
     if (!items.length) return alert("해당 도매처 주문이 없습니다.");
     const { blob, filename } = makeSupplierFile(supplierName, items);
@@ -1168,6 +1185,7 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   };
 
   const shareSupplierFile = async (batch, supplierName) => {
+    if (checkPurchaseBlock(batchSupplierOrders(batch, supplierName))) return;
     const key = `${batch.id}-${supplierName}`;
     if (sharingKey) return;
     const items = batchSupplierOrders(batch, supplierName);
@@ -1285,7 +1303,7 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
       </div>
 
       <div className="panel supplierDeliveryPanel"><div className="panelHead"><div><h2>도매처 전송센터</h2><p>ZIP 전체가 아니라 각 도매처의 전용 XLSX만 공유합니다. 오픈채팅은 파일을 저장한 뒤 채팅방 안에서 첨부하세요. 공유창 작업과 실제 전달 확인은 별도로 기록합니다.</p></div></div>
-        {deliveryRows.length === 0 ? <div className="emptyLine">발주서를 생성하면 도매처별 전송 작업이 여기에 나타납니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>주문수</th><th>전달방식</th><th>대상</th><th>전송상태</th><th>작업</th></tr></thead><tbody>{deliveryRows.map(({batch,supplierName,items,info,supplier}) => { const key=`${batch.id}-${supplierName}`; return <tr key={key}><td><b>{batch.id}</b><small className="subText">{new Date(batch.createdAt).toLocaleString("ko-KR")}</small></td><td><b>{supplierName}</b></td><td>{items.length}건</td><td>{supplier?.method || info.method || "수동"}</td><td>{supplier?.shareTarget || "미설정"}</td><td><span className={`deliveryStatus ${deliveryConfirmed(info) ? "sent" : "pending"}`}>{deliveryLabel(info)}</span>{info.sentAt && <small className="subText">{new Date(info.sentAt).toLocaleString("ko-KR")}</small>}</td><td className="actions"><button className="primary" disabled={sharingKey===key} onClick={()=>shareSupplierFile(batch,supplierName)}>{sharingKey===key?"공유 중...":deliveryConfirmed(info)?"다시 공유":"공유"}</button><button className="secondary" onClick={()=>downloadSupplierFile(batch,supplierName)}>파일</button><button className="secondary" onClick={()=>copyShareMessage(batch,supplierName)}>메시지</button>{!deliveryConfirmed(info)&&<button className="secondary" disabled={settings.systemMode === "테스트" && info.status === "전달확인(테스트)"} onClick={()=>confirmSupplierDelivery(batch,supplierName)}>{settings.systemMode === "테스트" ? "전달 확인(테스트)" : "실제 전달 확인"}</button>}</td></tr>; })}</tbody></table></div>}
+        {deliveryRows.length === 0 ? <div className="emptyLine">발주서를 생성하면 도매처별 전송 작업이 여기에 나타납니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>주문수</th><th>전달방식</th><th>대상</th><th>전송상태</th><th>작업</th></tr></thead><tbody>{deliveryRows.map(({batch,supplierName,items,info,supplier}) => { const key=`${batch.id}-${supplierName}`; return <tr key={key}><td><b>{batch.id}</b><small className="subText">{new Date(batch.createdAt).toLocaleString("ko-KR")}</small></td><td><b>{supplierName}</b></td><td>{items.length}건</td><td>{supplier?.method || info.method || "수동"}</td><td>{supplier?.shareTarget || "미설정"}</td><td><span className={`deliveryStatus ${deliveryConfirmed(info) ? "sent" : "pending"}`}>{items.some(o => blocked.has(o.id)) ? "CS 발주차단" : deliveryLabel(info)}</span>{info.sentAt && <small className="subText">{new Date(info.sentAt).toLocaleString("ko-KR")}</small>}</td><td className="actions"><button className="primary" disabled={sharingKey===key || items.some(o => blocked.has(o.id))} onClick={()=>shareSupplierFile(batch,supplierName)}>{sharingKey===key?"공유 중...":deliveryConfirmed(info)?"다시 공유":"공유"}</button><button className="secondary" onClick={()=>downloadSupplierFile(batch,supplierName)}>파일</button><button className="secondary" onClick={()=>copyShareMessage(batch,supplierName)}>메시지</button>{!deliveryConfirmed(info)&&<button className="secondary" disabled={settings.systemMode === "테스트" && info.status === "전달확인(테스트)"} onClick={()=>confirmSupplierDelivery(batch,supplierName)}>{settings.systemMode === "테스트" ? "전달 확인(테스트)" : "실제 전달 확인"}</button>}</td></tr>; })}</tbody></table></div>}
         <p className="securityNote">개인정보 보호를 위해 도매처에는 자기 주문이 들어간 XLSX만 공유하세요. 전체 ZIP을 카카오톡 방에 보내는 기능은 의도적으로 제공하지 않습니다.</p>
       </div>
 
