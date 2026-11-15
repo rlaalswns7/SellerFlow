@@ -6,14 +6,24 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "node tests-browser/smoke.mjs",
+    "verify": "npm test && npm run build"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
+    "jszip": "^3.10.1",
     "react": "latest",
     "react-dom": "latest",
-    "jszip": "^3.10.1",
+    "vite": "latest",
     "xlsx-js-style": "^1.2.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.16",
+    "playwright-core": "^1.65.1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

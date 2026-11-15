@@ -64,9 +64,13 @@ async function requestCoupang(path, query, credentials) {
       });
       const raw = await response.text();
       let data = {};
-      try { data = raw ? JSON.parse(raw) : {}; } catch { data = {}; }
+      try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error("쿠팡 주문 응답 JSON 형식 오류"); }
 
-      if (response.ok) return { status: response.status, data };
+      if (response.ok) {
+        if (![data?.data, data?.data?.content, data?.content, data].some(Array.isArray)) throw new Error("쿠팡 주문 목록 형식 오류");
+        if (data?.nextToken || data?.data?.nextToken) throw new Error("추가 주문 페이지가 있습니다. 조회 기간을 줄여 모든 주문이 포함되는지 확인하세요.");
+        return { status: response.status, data };
+      }
 
       const retryable = response.status === 429 || response.status >= 500;
       lastError = new Error(`쿠팡 API 오류 (${response.status})`);
@@ -205,6 +209,7 @@ export default async function handler(req, res) {
   try {
     const result = await requestCoupang(path, queryString, credentials);
     const orders = normalizeOrders(result.data);
+    if (new Set(orders.map(o => o.id)).size !== orders.length) throw new Error("분할 주문의 식별자가 겹쳐 동기화를 중단했습니다");
     return res.status(200).json({
       ok: true,
       orders,
@@ -221,3 +226,4 @@ export default async function handler(req, res) {
     });
   }
 }
+
