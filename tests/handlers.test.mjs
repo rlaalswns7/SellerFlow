@@ -1,0 +1,57 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import XLSX from 'xlsx-js-style';
+import JSZip from 'jszip';
+import * as rules from '../src/reliability.js';
+const source=fs.readFileSync(new URL('../src/main.jsx',import.meta.url),'utf8');
+function component(name,exports){const start=source.indexOf(`function ${name}(`);const end=source.indexOf('\n  return (',start);return source.slice(start,end)+`\n return {${exports}};\n}`;}
+function workbook(rows,name='송장.xlsx'){const w=XLSX.utils.book_new();XLSX.utils.book_append_sheet(w,XLSX.utils.aoa_to_sheet(rows),'송장');const b=XLSX.write(w,{type:'buffer',bookType:'xlsx'});return {name,size:b.length,arrayBuffer:async()=>b};}
+const header=['주문번호','택배사','운송장번호'];
+const order={id:'C10002',supplier:'A농장',product:'토마토 2kg',option:'2kg',qty:1,saleAmount:21900,purchaseStatus:'발주완료',address:'서울시 테스트로 123',date:'09/23',customer:'데모',phone:'01000000000'};
+const invoice={id:order.id,product:order.product,supplier:'A농장',carrier:'CJ대한통운',invoice:'123456789012',status:'등록대기'};
+function harness(name,overrides={}, extra={}){
+ const state={orders:[{...order}],invoices:[{...invoice}],returnCases:[],suppliers:[{name:'A농장',active:true}],products:[{name:order.product,active:true,cost:1000}],purchaseBatches:[],purchaseDispatches:[],invoiceLogs:[],csLogs:[],inquiries:[],settings:{systemMode:'테스트',autoPurchaseDispatch:false,highValueThreshold:100000,bulkQtyThreshold:5},alerts:[],saved:[],activities:[],...overrides};
+ const hooks=[],refs=[]; let hi=0,ri=0;const prompts=[];
+ const ctx={...rules,XLSX,JSZip,Blob,File,console,setTimeout,clearTimeout,Number,Date,JSON,Math,navigator:{},csPurchaseBlocks:rules.csBlockedIds,normalizeHeader:rules.headerKey,
+  useState:init=>{const i=hi++;if(!(i in hooks))hooks[i]=init;return [hooks[i],n=>{hooks[i]=typeof n==='function'?n(hooks[i]):n;}];},
+  useRef:init=>{const i=ri++;return refs[i] ||= {current:init};},
+  daysAgo:()=>0,nowIso:()=>new Date().toISOString(),uid:(prefix='ID')=>`${prefix}-${state.saved.length}-${state.activities.length}`,
+  productProfit:o=>Number(o.saleAmount)-1000,addressLooksInvalid:v=>String(v).length<8,
+  saveBlob:(blob,name)=>state.saved.push({blob,name}),arrayBufferToBase64:b=>Buffer.from(b).toString('base64'),
+  postPurchaseDispatch:async()=>{throw new Error('must not send');},
+  alert:m=>state.alerts.push(m),window:{confirm:()=>true,prompt:()=>prompts.shift() ?? null},...extra};
+ vm.createContext(ctx);
+ const exports={InvoicePage:'uploadInvoiceFiles, registerRows, edit, cancelRegister, rowIssues',PurchasePage:'toggle, createPurchaseZip, cancelBatch, retryDispatch, validate, shareSupplierFile',CSPage:'handleCase, completeManual, reply'};
+ vm.runInContext(component(name,exports[name]),ctx);
+ const render=()=>{hi=0;ri=0;const props={...state,globalSearch:'',invoiceFilter:'all',pushActivity:(...x)=>state.activities.push(x),pushNotification:()=>{}};for(const key of ['orders','invoices','invoiceLogs','purchaseBatches','purchaseDispatches','returnCases','csLogs','inquiries'])props['set'+key[0].toUpperCase()+key.slice(1)]=v=>state[key]=typeof v==='function'?v(state[key]):v;return ctx[name](props);};
+ return {state,render,hooks,refs,prompts};
+}
+test('handler rejects stored date/name corruption, without confirmation or state write',()=>{const h=harness('InvoicePage',{invoices:[{...invoice,carrier:'09/23',invoice:'김민준'}]});h.render().registerRows(h.state.invoices);assert.equal(h.state.invoices[0].status,'등록대기');assert.match(h.state.alerts[0],/검증 실패/);});
+test('handler permits clearing both fields to waiting',()=>{const h=harness('InvoicePage');h.prompts.push('','');h.render().edit(h.state.invoices[0]);assert.equal(h.state.invoices[0].invoice,'');assert.equal(h.state.orders[0].invoiceStatus,'송장대기');assert.equal(h.state.invoiceLogs[0].type,'송장 초기화');});
+test('handler rejects clearing only one field',()=>{const h=harness('InvoicePage');h.prompts.push('CJ','');h.render().edit(h.state.invoices[0]);assert.equal(h.state.invoices[0].invoice,'123456789012');});
+test('handler cancellation retains fields and explains next reset step',()=>{const h=harness('InvoicePage',{invoices:[{...invoice,status:'등록완료(테스트)'}]});h.render().cancelRegister(h.state.invoices[0]);assert.equal(h.state.invoices[0].status,'등록대기');assert.equal(h.state.invoices[0].invoice,'123456789012');});
+test('actual registration handler updates both entities in test mode',()=>{const h=harness('InvoicePage');h.render().registerRows(h.state.invoices);assert.equal(h.state.invoices[0].status,'등록완료(테스트)');assert.equal(h.state.orders[0].invoiceStatus,'등록완료(테스트)');});
+test('no fake registration success in live preparation mode',()=>{const h=harness('InvoicePage',{settings:{systemMode:'실운영 준비'}});h.render().registerRows(h.state.invoices);assert.equal(h.state.invoices[0].status,'등록대기');assert.match(h.state.alerts[0],/쓰[기]|연결/);});
+test('hold after invoice entry prevents registration',()=>{const h=harness('InvoicePage',{orders:[{...order,hold:true}]});h.render().registerRows(h.state.invoices);assert.equal(h.state.invoices[0].status,'등록대기');});
+test('corrupt file isolated while valid file commits',async()=>{const h=harness('InvoicePage',{invoices:[{...invoice,carrier:'',invoice:''}]});await h.render().uploadInvoiceFiles([{name:'bad.xlsx',size:100,arrayBuffer:async()=>{throw new Error('파일 손상');}},workbook([header,['C10002','CJ','123456789012']])]);assert.equal(h.state.invoices[0].invoice,'123456789012');assert.equal(h.hooks[4][0].failed,1);assert.equal(h.hooks[4][1].matched,1);});
+test('upload double click uses one in-flight operation',async()=>{const h=harness('InvoicePage',{invoices:[{...invoice,carrier:'',invoice:''}]});let release;const bytes=workbook([header,['C10002','CJ','123456789012']]);const f={...bytes,arrayBuffer:()=>new Promise(r=>release=async()=>r(await bytes.arrayBuffer()))};const api=h.render();const one=api.uploadInvoiceFiles([f]);await api.uploadInvoiceFiles([f]);await release();await one;assert.equal(h.state.activities.length,1);});
+test('order refunded during async file parsing is revalidated',async()=>{const h=harness('InvoicePage',{invoices:[{...invoice,carrier:'',invoice:''}]});let release;const bytes=workbook([header,['C10002','CJ','123456789012']]);const p=h.render().uploadInvoiceFiles([{...bytes,arrayBuffer:()=>new Promise(r=>release=async()=>r(await bytes.arrayBuffer()))}]);h.state.returnCases=[{orderId:'C10002',processed:true,resolution:'환불'}];h.render();await release();await p;assert.equal(h.state.invoices[0].invoice,'');});
+test('failed import always releases busy state for next valid import',async()=>{const h=harness('InvoicePage',{invoices:[{...invoice,carrier:'',invoice:''}]});let api=h.render();await api.uploadInvoiceFiles([workbook([['주문번호','주문일','수취인'],['C10002','09/23','이름']])]);api=h.render();await api.uploadInvoiceFiles([workbook([header,['C10002','CJ','123456789012']])]);assert.equal(h.state.invoices[0].invoice,'123456789012');});
+function purchase(overrides={},extra={}){return harness('PurchasePage',{orders:[{...order,purchaseStatus:'발주대기'}],invoices:[],...overrides},extra);}
+test('purchase only commits eligible selected targets, ignores stale hidden selection',async()=>{const h=purchase({orders:[{...order,purchaseStatus:'발주대기'},{...order,id:'C10003',hold:true,purchaseStatus:'발주대기'}]});let api=h.render();api.toggle('C10002');api.toggle('C10003');api=h.render();await api.createPurchaseZip();assert.equal(h.state.orders[0].purchaseStatus,'발주완료');assert.equal(h.state.orders[1].purchaseStatus,'발주대기');assert.equal(h.state.purchaseBatches[0].orderIds.length,1);assert.equal(h.state.saved.length,1);});
+test('purchase double click produces only one batch/file',async()=>{const h=purchase();h.render().toggle('C10002');const api=h.render();await Promise.all([api.createPurchaseZip(),api.createPurchaseZip()]);assert.equal(h.state.saved.length,1);assert.equal(h.state.purchaseBatches.length,1);});
+test('ZIP exception does not commit orders and releases busy state',async()=>{class BadZip {file(){} async generateAsync(){throw new Error('압축 실패');}}const h=purchase({}, {JSZip:BadZip});h.render().toggle('C10002');await h.render().createPurchaseZip();assert.equal(h.state.purchaseBatches.length,0);assert.equal(h.state.orders[0].purchaseStatus,'발주대기');assert.equal(h.hooks[1],false);});
+test('filename collision fails before writing or completing orders',async()=>{const h=purchase({orders:[{...order,purchaseStatus:'발주대기'},{...order,id:'C10003',supplier:'C농장',purchaseStatus:'발주대기'}],suppliers:[{name:'A농장',active:true,orderFileName:'same'},{name:'C농장',active:true,orderFileName:'same'}]});let api=h.render();api.toggle('C10002');api.toggle('C10003');await h.render().createPurchaseZip();assert.equal(h.state.saved.length,0);assert.equal(h.state.purchaseBatches.length,0);assert.match(h.state.alerts[0],/겹칩니다/);});
+for(const qty of [0,-1,1.5,Infinity,'not a number'])test(`purchase quantity rejected ${qty}`,()=>{assert.ok(purchase().render().validate({...order,qty,purchaseStatus:'발주대기'}).includes('수량 오류'));});
+test('missing shipping address blocks purchase',()=>assert.ok(purchase().render().validate({...order,address:''}).includes('배송지 확인 필요')));
+test('canceled batch cannot be retried',async()=>{const h=purchase({purchaseBatches:[{id:'P1',status:'취소',orderIds:['C10002'],suppliers:['A농장']}]});await h.render().retryDispatch({batchId:'P1',supplierName:'A농장'});assert.equal(h.state.purchaseDispatches.length,0);assert.match(h.state.alerts[0],/유효/);});
+test('delivered batch cannot be locally canceled',()=>{const b={id:'P1',status:'발주완료',orderIds:['C10002'],suppliers:['A농장'],deliveries:{'A농장':{status:'전달완료'}}};const h=purchase({purchaseBatches:[b]});h.render().cancelBatch(b);assert.equal(h.state.purchaseBatches[0].status,'발주완료');});
+test('local unsent cancellation also cancels queued dispatch',()=>{const b={id:'P1',status:'발주완료',orderIds:['C10002'],suppliers:['A농장'],deliveries:{'A농장':{status:'미전송'}}};const h=purchase({purchaseBatches:[b],purchaseDispatches:[{batchId:'P1',status:'재시도대기'}]});h.render().cancelBatch(b);assert.equal(h.state.purchaseBatches[0].status,'취소');assert.equal(h.state.purchaseDispatches[0].status,'취소');});
+test('CS action with missing order does not complete',()=>{const c={id:'R1',orderId:'unknown',reason:'단순변심'};const h=harness('CSPage',{returnCases:[c]});h.render().handleCase(c);assert.notEqual(h.state.returnCases[0].processed,true);assert.match(h.state.alerts[0],/주문/);});
+test('CS manual undecided result cannot be completed',()=>{const c={id:'R1',orderId:'C10002',resolution:'수동'};const h=harness('CSPage',{returnCases:[c]});h.render().completeManual(c);assert.notEqual(h.state.returnCases[0].processed,true);});
+test('CS API missing in non-test mode never reports success',()=>{const c={id:'R1',orderId:'C10002',reason:'단순변심'};const h=harness('CSPage',{settings:{systemMode:'실운영 준비'},returnCases:[c]});h.render().handleCase(c);assert.notEqual(h.state.returnCases[0].processed,true);});
+
+test('manual full-width tracking normalized before storing',()=>{const h=harness('InvoicePage');h.prompts.push('ＣＪ','１２３４５６７８９０１２');h.render().edit(h.state.invoices[0]);assert.equal(h.state.invoices[0].invoice,'123456789012');});
+test('manual full-width duplicate tracking rejected',()=>{const h=harness('InvoicePage',{invoices:[{...invoice,invoice:''},{...invoice,id:'C10003',invoice:'123456789012'}]});h.prompts.push('CJ','１２３４５６７８９０１２');h.render().edit(h.state.invoices[0]);assert.equal(h.state.invoices[0].invoice,'');});

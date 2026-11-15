@@ -1,3 +1,4 @@
+import { validateBackup } from "../src/reliability.js";
 import { requireAuth, sameOrigin } from "./_auth.js";
 
 const STATE_ID = "main";
@@ -35,6 +36,7 @@ export default async function handler(req, res) {
   }
 
   if (!requireAuth(req, res)) return;
+  if (process.env.SELLERFLOW_RUNTIME_ENABLED === "true") return res.status(409).json({ ok: false, code: "USE_RUNTIME", message: "서버 자동화 모드에서는 최신 화면과 런타임 API를 사용하세요." });
 
   if (req.method === "PUT" && !sameOrigin(req)) {
     return res.status(403).json({
@@ -66,7 +68,7 @@ export default async function handler(req, res) {
 
       try {
         rows = raw ? JSON.parse(raw) : [];
-      } catch {}
+      } catch { throw new Error("서버 백업 응답이 JSON이 아닙니다"); }
 
       if (!upstream.ok) {
         return res.status(502).json({
@@ -76,7 +78,9 @@ export default async function handler(req, res) {
         });
       }
 
-      const row = Array.isArray(rows) ? rows[0] : null;
+      if (!Array.isArray(rows)) throw new Error("서버 백업 목록 형식 오류");
+      const row = rows[0];
+      if (row) validateBackup(row.data);
 
       return res.status(200).json({
         ok: true,
@@ -88,7 +92,9 @@ export default async function handler(req, res) {
     }
 
        const data = req.body?.data;
-    const version = Math.max(1, Number(req.body?.version || 1));
+    const version = Number(req.body?.version || 1);
+    try { validateBackup(data); if (!Number.isSafeInteger(version) || version < 1 || version > 7) throw new Error(); }
+    catch { return res.status(400).json({ ok: false, code: "INVALID_STATE", message: "백업 데이터 또는 버전 형식 오류" }); }
 
     if (!data || typeof data !== "object" || Array.isArray(data)) {
       return res.status(400).json({
@@ -153,3 +159,4 @@ export default async function handler(req, res) {
     });
   }
 }
+

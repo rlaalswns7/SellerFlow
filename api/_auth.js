@@ -27,7 +27,7 @@ function parseCookies(req) {
   return Object.fromEntries(raw.split(";").map((part) => {
     const i = part.indexOf("=");
     if (i < 0) return ["", ""];
-    return [part.slice(0, i).trim(), decodeURIComponent(part.slice(i + 1).trim())];
+    try { return [part.slice(0, i).trim(), decodeURIComponent(part.slice(i + 1).trim())]; } catch { return ["", ""]; }
   }).filter(([key]) => key));
 }
 
@@ -74,3 +74,4 @@ export function sameOrigin(req) {
   const host = String(req.headers?.host || "");
   try { return new URL(origin).host === host; } catch { return false; }
 }
+

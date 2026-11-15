@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 import JSZip from "jszip";
+import { fetchCoupangOrders, getCoupangHealth } from "./coupang-client.js";
+import { normalizeText, invoiceValueIssues, carrierName, parseInvoiceFile, planInvoiceImport, fulfillmentIssues, csBlockedIds, mergeSyncedOrder, safeFileName, safeSheetName, validateBackup } from "./reliability.js";
+import AutomationPanel from "./AutomationPanel.jsx";
 import "./style.css";
 
 const STORAGE_PREFIX = "sellerflow_v2_";
@@ -229,7 +232,15 @@ function loadStored(key, fallback) {
 function usePersistentState(key, fallback) {
   const [state, setState] = useState(() => loadStored(key, fallback));
   useEffect(() => {
-    localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(state));
+    try {
+      localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(state));
+    } catch (error) {
+      console.error("SellerFlow 저장 실패:", key, error);
+      if (!window.__sellerFlowStorageWarning) {
+        window.__sellerFlowStorageWarning = true;
+        alert("브라우저 저장에 실패했습니다. 최근 변경이 저장되지 않았을 수 있습니다. 설정에서 JSON 백업을 받아 주세요. 오류 항목: " + key);
+      }
+    }
   }, [key, state]);
   return [state, setState];
 }
@@ -242,7 +253,7 @@ function saveBlob(blob, filename) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 function arrayBufferToBase64(buffer) {
@@ -274,24 +285,29 @@ async function unlockDispatch() {
 }
 
 async function postPurchaseDispatch(endpoint, payload, retried = false) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
   const response = await fetch(endpoint || "/api/purchase-dispatch", {
+    signal: controller.signal,
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   let data = {};
-  try { data = await response.json(); } catch {}
+  try { data = await response.json(); } catch { throw new Error("전송 응답을 확인하지 못했습니다. 전달 여부를 확인하세요."); }
   if (response.status === 401 && data?.code === "AUTH_REQUIRED" && !retried) {
     const unlocked = await unlockDispatch();
     if (unlocked) return postPurchaseDispatch(endpoint, payload, true);
   }
-  if (!response.ok || data?.ok === false) {
+  if (!response.ok || data?.ok !== true) {
     const error = new Error(data?.message || `전송 서버 오류 (${response.status})`);
     error.code = data?.code || "DISPATCH_FAILED";
     throw error;
   }
   return data;
+  } finally { clearTimeout(timeout); }
 }
 
 function normalizeHeader(value) {
@@ -373,9 +389,11 @@ function plusSupplierDays(iso, days, holidays = "") {
   if (!Number.isFinite(d.getTime())) return "-";
   const holidaySet = new Set(String(holidays||"").split(",").map(x=>x.trim()).filter(Boolean));
   let remain = Number(days||0);
-  while (remain > 0) {
+  if (!Number.isSafeInteger(remain) || remain < 0 || remain > 365) return "설정 확인";
+  let steps = 0;
+  while (remain > 0 && steps++ < 4000) {
     d.setDate(d.getDate()+1);
-    const key=d.toISOString().slice(0,10);
+    const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     const weekend=d.getDay()===0||d.getDay()===6;
     if (!weekend && !holidaySet.has(key)) remain--;
   }
@@ -419,7 +437,7 @@ function orderRiskReasons(order, products, suppliers, invoices) {
   if (supplier && supplier.active === false) reasons.push("중지된 도매처");
   if (order.hold) reasons.push(`보류 주문${order.holdReason ? `: ${order.holdReason}` : ""}`);
   if (Number(order.qty || 0) >= 5) reasons.push("대량수량 확인");
-  if (order.address && addressLooksInvalid(order.address)) reasons.push("배송지 확인 필요");
+  if (!order.address || addressLooksInvalid(order.address)) reasons.push("배송지 확인 필요");
   if (product?.automationMode === "수동검토" && !order.manualApproved) reasons.push("상품 자동화 규칙: 수동검토");
   if (product?.stockout) reasons.push("품절 표시 상품");
   if (product && productProfit(order, product) < 0) reasons.push("예상 손실 주문");
@@ -495,6 +513,19 @@ function App() {
   const [undoStack, setUndoStack] = usePersistentState("undo_stack", []);
   const [autoBackups, setAutoBackups] = usePersistentState("auto_backups", []);
 
+  useEffect(() => {
+    const applyRemote = event => {
+      const data = event.detail; validateBackup(data);
+      setOrders(data.orders || []); setProducts(data.products || []); setSuppliers(data.suppliers || []);
+      setInvoices(data.invoices || []); setPurchaseBatches(data.purchaseBatches || []); setPurchaseDispatches(data.purchaseDispatches || []);
+      setInquiries(data.inquiries || []); setReturnCases(data.returnCases || []); setCsLogs(data.csLogs || []);
+      setInvoiceLogs(data.invoiceLogs || []); setActivityLogs(data.activityLogs || []); setNotifications(data.notifications || []);
+      setMarketingLogs(data.marketingLogs || []); setSettings({ ...defaultSettings, ...(data.settings || {}) });
+    };
+    window.addEventListener("sellerflow-server-state", applyRemote);
+    return () => window.removeEventListener("sellerflow-server-state", applyRemote);
+  }, []);
+
   const snapshotNow = (label = "수동 스냅샷") => {
     const snap = { id: uid("SNAP"), time: nowIso(), label, data: compactSnapshot({ orders, products, suppliers, invoices, purchaseBatches, purchaseDispatches, inquiries, returnCases, csLogs, invoiceLogs, activityLogs, notifications, marketingLogs, settings }) };
     setUndoStack(prev => [snap, ...prev].slice(0, 8));
@@ -505,7 +536,8 @@ function App() {
     const snap = undoStack[0];
     if (!snap) return alert("되돌릴 최근 작업이 없습니다.");
     if (!window.confirm(`${snap.label} 이전 상태로 되돌릴까요?`)) return;
-    const d = snap.data;
+    const d = validateBackup(snap.data);
+    d.returnCases = (d.returnCases || []).map(c => ({ ...c, evidenceImages: returnCases.find(x => x.id === c.id)?.evidenceImages || c.evidenceImages || [] }));
     setOrders(d.orders || []); setProducts(d.products || []); setSuppliers(d.suppliers || []); setInvoices(d.invoices || []); setPurchaseBatches(d.purchaseBatches || []); setPurchaseDispatches(d.purchaseDispatches || []);
     setInquiries(d.inquiries || []); setReturnCases(d.returnCases || []); setCsLogs(d.csLogs || []); setInvoiceLogs(d.invoiceLogs || []); setActivityLogs(d.activityLogs || []); setNotifications(d.notifications || []); setMarketingLogs(d.marketingLogs || []); setSettings({ ...defaultSettings, ...(d.settings || {}) });
     setUndoStack(prev => prev.slice(1));
@@ -525,7 +557,7 @@ function App() {
     setNotifications((prev) => [item, ...prev].slice(0, 100));
 
     if (settings.browserNotifications && "Notification" in window && Notification.permission === "granted") {
-      new Notification(`SellerFlow · ${type}`, { body: message });
+      try { new Notification(`SellerFlow · ${type}`, { body: message }); } catch { /* iPad browsers can reject the constructor. */ }
     }
   };
 
@@ -534,7 +566,7 @@ function App() {
       let changed = false;
       const next = prev.map((order) => {
         const product = products.find((p) => p.name === order.product);
-        const nextSupplier = order.supplierOverride || product?.supplier || "미연결";
+        const nextSupplier = order.purchaseBatchId || order.purchaseStatus === "발주완료" ? order.supplier : order.supplierOverride || product?.supplier || "미연결";
         let nextPurchase = order.purchaseStatus;
 
         if (!order.marketing && order.purchaseStatus !== "발주완료") {
@@ -596,15 +628,17 @@ function App() {
     setSettings(prev => ({ ...defaultSettings, ...prev, dataVersion: DATA_VERSION }));
   }, []);
 
+  const autoBackupDataRef = useRef(null);
+  autoBackupDataRef.current = { orders, products, suppliers, invoices, purchaseBatches, purchaseDispatches, inquiries, returnCases, csLogs, invoiceLogs, activityLogs, notifications, marketingLogs, settings };
   useEffect(() => {
-    const minutes = Math.max(1, Number(settings.autoBackupMinutes || 15));
+    const minutes = Math.min(1440, Math.max(1, Number(settings.autoBackupMinutes) || 15));
     const makeBackup = () => {
-      const snap = { id:uid("AUTO"), time:nowIso(), label:"자동 백업", data:compactSnapshot({ orders, products, suppliers, invoices, purchaseBatches, purchaseDispatches, inquiries, returnCases, csLogs, invoiceLogs, activityLogs, notifications, marketingLogs, settings }) };
+      const snap = { id:uid("AUTO"), time:nowIso(), label:"자동 백업", data:compactSnapshot(autoBackupDataRef.current) };
       setAutoBackups(prev => [snap, ...prev].slice(0, 5));
     };
     const timer = setInterval(makeBackup, minutes * 60000);
     return () => clearInterval(timer);
-  }, [settings.autoBackupMinutes, orders, products, suppliers, invoices, purchaseBatches, purchaseDispatches, inquiries, returnCases, csLogs, invoiceLogs, activityLogs, notifications, marketingLogs, settings]);
+  }, [settings.autoBackupMinutes]);
 
   useEffect(() => {
     if (!settings.autoRetentionCleanup) return;
@@ -860,7 +894,11 @@ function OperationsPage({ orders, setOrders, products, suppliers, invoices, inqu
   </>;
 }
 
-function OrderPage({ orders, setOrders, products, setProducts, suppliers, invoices, purchaseBatches, globalSearch, orderFilter, openPage, pushActivity, pushNotification, settings, inquiries, returnCases }) {
+const csPurchaseBlocks = csBlockedIds;
+
+function OrderPage({ orders, setOrders, products, setProducts, suppliers, invoices, purchaseBatches, globalSearch, orderFilter, openPage, pushActivity, pushNotification, settings, setSettings, inquiries, returnCases }) {
+  const csBlocked = csPurchaseBlocks(returnCases);
+  const [syncingCoupang, setSyncingCoupang] = useState(false);
   const [search,setSearch]=useState(""); const [selectedOrderId,setSelectedOrderId]=useState(null); const [selected,setSelected]=useState([]); const [preset,setPreset]=useState(orderFilter||"all");
   const [savedFilters,setSavedFilters]=usePersistentState("saved_order_filters",[{id:"F1",name:"미연결",preset:"unlinked"},{id:"F2",name:"오늘 발주",preset:"waiting"},{id:"F3",name:"보류",preset:"hold"},{id:"F4",name:"즐겨찾기",preset:"favorite"}]);
   const q=(search||globalSearch).trim().toLowerCase();
@@ -868,27 +906,89 @@ function OrderPage({ orders, setOrders, products, setProducts, suppliers, invoic
   const rows=orders.filter(o=>{ if(q&&!searchable(o).includes(q)) return false; const f=preset||orderFilter; if(f==="waiting")return o.purchaseStatus==="발주대기"&&!o.marketing; if(f==="purchased")return o.purchaseStatus==="발주완료"; if(f==="unlinked")return o.supplier==="미연결"; if(f==="marketing")return o.marketing; if(f==="hold")return o.hold; if(f==="favorite")return o.favorite; if(f==="risk")return orderRiskReasons(o,products,suppliers,invoices).length>0; return true; });
   const selectedOrder=orders.find(o=>o.id===selectedOrderId); const toggle=id=>setSelected(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]); const toggleAll=()=>setSelected(selected.length===rows.length?[]:rows.map(o=>o.id));
   const applyBulk=(action)=>{ if(!selected.length)return alert("주문을 선택해주세요."); let patch={}; let desc=""; if(action==="hold"){const reason=prompt("보류 이유", "확인 필요"); if(reason===null)return; patch={hold:true,holdReason:reason};desc=`${selected.length}건 보류`;} if(action==="unhold"){patch={hold:false,holdReason:""};desc=`${selected.length}건 보류 해제`;} if(action==="favorite"){patch={favorite:true};desc=`${selected.length}건 즐겨찾기`;} if(action==="memo"){const memo=prompt("선택 주문에 추가할 내부 메모","");if(memo===null)return;patch={internalMemo:memo};desc=`${selected.length}건 메모 수정`;} if(!confirm(`${desc}\n\n변경 전: ${selected.length}건 선택\n변경 후: 동일 ${selected.length}건에 적용`))return; setOrders(p=>p.map(o=>selected.includes(o.id)?{...o,...patch}:o)); pushActivity("대량 주문 수정",desc); setSelected([]); };
-  const bulkSupplier=()=>{ if(!selected.length)return alert("주문 선택 필요"); const name=prompt(`도매처명 입력\n${suppliers.filter(s=>s.active).map(s=>s.name).join(", ")}`); if(!name)return; if(!suppliers.some(s=>s.name===name&&s.active))return alert("사용 가능한 도매처가 아닙니다."); if(!confirm(`${selected.length}건의 주문 도매처를 ${name}(으)로 변경할까요?`))return; setOrders(p=>p.map(o=>selected.includes(o.id)?{...o,supplierOverride:name}:o)); pushActivity("대량 도매처 변경",`${selected.length}건 → ${name}`); setSelected([]); };
+  const bulkSupplier=()=>{ if(!selected.length)return alert("주문 선택 필요"); if(orders.some(o=>selected.includes(o.id)&&(o.purchaseBatchId||o.purchaseStatus==="발주완료")))return alert("발주 이후 도매처는 변경할 수 없습니다. 기존 발주를 먼저 확인하세요."); const name=prompt(`도매처명 입력\n${suppliers.filter(s=>s.active).map(s=>s.name).join(", ")}`); if(!name)return; if(!suppliers.some(s=>s.name===name&&s.active))return alert("사용 가능한 도매처가 아닙니다."); if(!confirm(`${selected.length}건의 주문 도매처를 ${name}(으)로 변경할까요?`))return; setOrders(p=>p.map(o=>selected.includes(o.id)?{...o,supplierOverride:name}:o)); pushActivity("대량 도매처 변경",`${selected.length}건 → ${name}`); setSelected([]); };
   const importDemoOrder=()=>{ const active=products.filter(p=>p.active!==false&&!p.stockout); if(!active.length)return alert("자동화 사용 상품 없음"); const product=active[Math.floor(Math.random()*active.length)]; const n=Math.max(10000,...orders.map(o=>Number(String(o.id).replace(/\D/g,""))||0))+1; const id=`C${n}`; const supplier=product.supplier||"미연결"; const order={id,date:new Date().toLocaleDateString("ko-KR",{month:"2-digit",day:"2-digit"}).replace(/\.\s?/g,"/").replace(/\/$/,""),createdAt:nowIso(),customer:"데모고객",phone:"010-1234-0000",address:"경남 창원시 데모로 1",product:product.name,option:product.option,qty:1,saleAmount:product.price,supplier,purchaseStatus:supplier==="미연결"?"도매처 연결 필요":"발주대기",invoiceStatus:"송장대기",marketing:false,channelStatus:"결제완료",favorite:false,hold:false}; setOrders(p=>[order,...p]); pushActivity("주문 가져오기",`${id} 1건 추가(데모)`); pushNotification("주문 가져오기 완료",`${id} 주문을 가져왔습니다.`,"주문내역"); };
-  const updateOrder=(id,patch,label="주문 수정")=>{setOrders(p=>p.map(o=>o.id===id?{...o,...patch}:o));pushActivity(label,`${id} 수정`);};
+  const updateOrder=(id,patch,label="주문 수정")=>{if(patch.supplierOverride && orders.some(o=>o.id===id&&(o.purchaseBatchId||o.purchaseStatus==="발주완료")))return alert("발주 이후 도매처는 변경할 수 없습니다. 기존 발주를 먼저 확인하세요.");setOrders(p=>p.map(o=>o.id===id?{...o,...patch}:o));pushActivity(label,`${id} 수정`);};
+  const dateParam=(offsetDays=0)=>{const d=new Date();d.setDate(d.getDate()+offsetDays);const local=new Date(d.getTime()-d.getTimezoneOffset()*60000);return local.toISOString().slice(0,10)};
+  const syncCoupangNow=async()=>{
+    if(syncingCoupang)return;
+    if(window.SellerFlowRuntime?.enabled){
+      setSyncingCoupang(true);
+      try{await window.SellerFlowRuntime.syncNow();alert("서버에서 실제 주문·문의·반품을 수집했습니다.");}catch(e){alert(e.message);}finally{setSyncingCoupang(false);}
+      return;
+    }
+    setSyncingCoupang(true);
+    try{
+      const health=await getCoupangHealth();
+      if(!health.configured){
+        setSettings(prev=>({...prev,wingStatus:"미연결 · 테스트 모드",apiSuccessRate:0}));
+        alert("쿠팡 Open API 키가 설정되지 않았습니다.\n\n현재는 데모 주문으로만 기능을 테스트할 수 있습니다. 실제 주문 동기화는 쿠팡윙 API 이용 권한과 서버 환경변수 설정 후 사용할 수 있습니다.");
+        return;
+      }
+      const result=await fetchCoupangOrders({createdAtFrom:dateParam(-3),createdAtTo:dateParam(0),maxPerPage:100});
+      const imported=result.orders||[];
+      const keyOf=o=>`${o.coupangOrderId||o.id}|${o.coupangVendorItemId||o.product||""}|${o.shipmentBoxId||""}`;
+      const existingKeys = new Set(orders.map(keyOf));
+      const added = imported.filter(row => !existingKeys.has(keyOf(row))).length;
+      const updated = imported.length - added;
+      const unresolved = imported.filter(row => !products.some(p => p.name === row.product || p.vendorProductName === row.product)).length;
+      setOrders(prev=>{
+        const next=[...prev];
+
+        const index=new Map(next.map((o,i)=>[keyOf(o),i]));
+        imported.forEach(row=>{
+          const product=products.find(p=>p.name===row.product)||products.find(p=>p.vendorProductName&&p.vendorProductName===row.product);
+          const supplier=product?.supplier||row.supplier||"미연결";
+          const normalized={...row,supplier,purchaseStatus:supplier==="미연결"?"도매처 연결 필요":product?.active===false||product?.stockout?"자동화 중지":"발주대기"};
+
+          const key=keyOf(normalized);
+          const idx=index.get(key);
+          if(idx===undefined){next.push(normalized);index.set(key,next.length-1);}
+          else{next[idx]=mergeSyncedOrder(next[idx],normalized);}
+        });
+        return next;
+      });
+      const syncedAt=result.fetchedAt||nowIso();
+      setSettings(prev=>({...prev,wingStatus:"쿠팡 주문 API 연결됨",apiLastSyncAt:syncedAt,apiSuccessRate:100,apiOutage:false}));
+      pushActivity("쿠팡 주문 동기화",`최근 3일 · 신규 ${added}건 / 갱신 ${updated}건`);
+      pushNotification("쿠팡 주문 동기화 완료",`신규 ${added}건 · 갱신 ${updated}건${unresolved?` · 상품 미매칭 ${unresolved}건`:""}`,"주문내역",unresolved?"warning":"info");
+      alert(`쿠팡 주문 동기화 완료\n\n신규 ${added}건\n갱신 ${updated}건${unresolved?`\n상품 미매칭 ${unresolved}건`:""}`);
+    }catch(error){
+      setSettings(prev=>({...prev,wingStatus:"쿠팡 API 연결 실패",apiOutage:false,apiSuccessRate:0}));
+      pushNotification("쿠팡 주문 동기화 실패",error?.message||"쿠팡 주문을 가져오지 못했습니다.","주문내역","danger");
+      alert(error?.message||"쿠팡 주문 동기화에 실패했습니다.");
+    }finally{setSyncingCoupang(false);}
+  };
   const saveFilter=()=>{const name=prompt("필터 이름",search||"내 필터");if(!name)return;setSavedFilters(p=>[...p,{id:uid("FILTER"),name,preset,search}].slice(-12));};
   const chosenProduct=selectedOrder?products.find(p=>p.name===selectedOrder.product):null; const chosenSupplier=selectedOrder?suppliers.find(s=>s.name===selectedOrder.supplier):null; const chosenInvoice=selectedOrder?invoices.find(r=>r.id===selectedOrder.id):null; const risks=selectedOrder?orderRiskReasons(selectedOrder,products,suppliers,invoices):[];
   const timeline=selectedOrder?[{time:selectedOrder.createdAt,label:"주문 수집"},selectedOrder.purchaseBatchId&&{time:purchaseBatches.find(b=>b.id===selectedOrder.purchaseBatchId)?.createdAt,label:"발주 완료"},chosenInvoice&&{time:chosenInvoice.updatedAt,label:`운송장 ${chosenInvoice.status}`},...inquiries.filter(q=>q.orderId===selectedOrder.id).map(q=>({time:q.createdAt,label:`문의 ${q.status}`})),...returnCases.filter(c=>c.orderId===selectedOrder.id).map(c=>({time:c.createdAt,label:`${c.caseType} ${c.status}`}))].filter(Boolean).sort((a,b)=>new Date(a.time)-new Date(b.time)):[];
   const expectedShip=selectedOrder&&chosenSupplier?plusSupplierDays(selectedOrder.createdAt,chosenSupplier.shipLeadDays||1,chosenSupplier.holidays):"-"; const expectedDelivery=selectedOrder&&chosenSupplier?plusSupplierDays(selectedOrder.createdAt,(chosenSupplier.shipLeadDays||1)+(chosenSupplier.deliveryLeadDays||2),chosenSupplier.holidays):"-";
   return <>
-    <PageHead title="주문내역" description="스마트 검색·저장 필터·대량 수정·보류·즐겨찾기·통합 상세·타임라인을 지원합니다." actions={<><button className="secondary" onClick={importDemoOrder}>주문 가져오기(데모)</button><button className="primary" onClick={()=>openPage("발주 관리")}>발주 관리</button></>}/>
+    <PageHead title="주문내역" description="실제 API 연결 전에는 데모 주문으로 수집·매칭·발주 흐름을 점검합니다." actions={<><button className="secondary" onClick={syncCoupangNow} disabled={syncingCoupang}>{syncingCoupang?"쿠팡 주문 가져오는 중…":"실제 쿠팡 주문 동기화(API 키 필요)"}</button><button className="secondary" onClick={importDemoOrder}>주문 가져오기(데모)</button><button className="primary" onClick={()=>openPage("발주 관리")}>발주 관리</button></>}/>
+    <div className="securityNote"><strong>테스트 모드</strong> · 쿠팡윙 API 키가 없으면 실제 주문은 수집되지 않습니다. 아래 데모 주문은 가상 데이터이며 실제 고객·주문·결제 정보가 아닙니다.</div>
     <div className="panel filterBar"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="주문번호·고객·전화·주소·상품·도매처·송장번호 검색"/><select value={preset} onChange={e=>setPreset(e.target.value)}><option value="all">전체</option><option value="waiting">발주 대기</option><option value="unlinked">미연결</option><option value="hold">보류</option><option value="favorite">즐겨찾기</option><option value="risk">위험 주문</option><option value="marketing">마케팅</option></select><button className="secondary" onClick={saveFilter}>현재 필터 저장</button>{savedFilters.map(f=><button className="chip" key={f.id} onClick={()=>{setPreset(f.preset||"all");setSearch(f.search||"")}}>{f.name}</button>)}</div>
     {selected.length>0&&<div className="panel bulkBar"><b>{selected.length}건 선택</b><button className="secondary" onClick={()=>applyBulk("hold")}>보류</button><button className="secondary" onClick={()=>applyBulk("unhold")}>보류 해제</button><button className="secondary" onClick={()=>applyBulk("favorite")}>즐겨찾기</button><button className="secondary" onClick={bulkSupplier}>도매처 변경</button><button className="secondary" onClick={()=>applyBulk("memo")}>메모</button></div>}
-    <div className="panel"><div className="table"><table><thead><tr><th><input type="checkbox" checked={rows.length>0&&selected.length===rows.length} onChange={toggleAll}/></th><th>핀</th><th>주문번호</th><th>날짜</th><th>고객</th><th>상품</th><th>수량</th><th>금액</th><th>도매처</th><th>발주</th><th>송장</th><th>점검</th><th>작업</th></tr></thead><tbody>{rows.length?rows.map(o=>{const rr=orderRiskReasons(o,products,suppliers,invoices);return <tr key={o.id} className={o.hold?"heldRow":""}><td><input type="checkbox" checked={selected.includes(o.id)} onChange={()=>toggle(o.id)}/></td><td><button className="iconButton" onClick={()=>updateOrder(o.id,{favorite:!o.favorite},"즐겨찾기")}>{o.favorite?"★":"☆"}</button></td><td><b>{o.id}</b>{o.hold&&<small className="subText dangerText">보류</small>}</td><td>{o.date}</td><td>{o.customer}<small className="subText">{settings.privacyMasking?maskPhone(o.phone):o.phone||"-"}</small></td><td>{o.product}<small className="subText">{o.option}</small></td><td>{o.qty}</td><td>{money(o.saleAmount)}</td><td>{o.supplier}</td><td><Tag>{o.purchaseStatus}</Tag></td><td><Tag>{o.invoiceStatus}</Tag></td><td>{rr.length?<span className="severity danger">{rr.length}개</span>:<span className="okText">정상</span>}</td><td><button className="secondary" onClick={()=>setSelectedOrderId(o.id)}>상세</button></td></tr>}):<tr><td colSpan="13">주문 없음</td></tr>}</tbody></table></div></div>
+    <div className="panel"><div className="table"><table><thead><tr><th><input type="checkbox" checked={rows.length>0&&selected.length===rows.length} onChange={toggleAll}/></th><th>핀</th><th>주문번호</th><th>날짜</th><th>고객</th><th>상품</th><th>수량</th><th>금액</th><th>도매처</th><th>발주</th><th>송장</th><th>점검</th><th>작업</th></tr></thead><tbody>{rows.length?rows.map(o=>{const rr=orderRiskReasons(o,products,suppliers,invoices);return <tr key={o.id} className={o.hold?"heldRow":""}><td><input type="checkbox" checked={selected.includes(o.id)} onChange={()=>toggle(o.id)}/></td><td><button className="iconButton" onClick={()=>updateOrder(o.id,{favorite:!o.favorite},"즐겨찾기")}>{o.favorite?"★":"☆"}</button></td><td><b>{o.id}</b>{o.hold&&<small className="subText dangerText">보류</small>}</td><td>{o.date}</td><td>{o.customer}<small className="subText">{settings.privacyMasking?maskPhone(o.phone):o.phone||"-"}</small></td><td>{o.product}<small className="subText">{o.option}</small></td><td>{o.qty}</td><td>{money(o.saleAmount)}</td><td>{o.supplier}</td><td><Tag>{csBlocked.has(o.id) ? "CS 발주차단" : o.purchaseStatus}</Tag></td><td><Tag>{o.invoiceStatus}</Tag></td><td>{rr.length?<span className="severity danger">{rr.length}개</span>:<span className="okText">정상</span>}</td><td><button className="secondary" onClick={()=>setSelectedOrderId(o.id)}>상세</button></td></tr>}):<tr><td colSpan="13">주문 없음</td></tr>}</tbody></table></div></div>
     {selectedOrder&&<div className="panel orderDetailPanel"><div className="panelHead"><div><h2>주문 통합 상세</h2><p>{selectedOrder.id} · 고객/발주/송장/CS/수익/일정을 한 화면에서 확인</p></div><button className="secondary" onClick={()=>setSelectedOrderId(null)}>닫기</button></div><div className="detailGrid"><Detail label="고객" value={`${selectedOrder.customer} · ${customerRiskLabel(selectedOrder,inquiries,returnCases,orders)}`}/><Detail label="전화" value={settings.privacyMasking?maskPhone(selectedOrder.phone):selectedOrder.phone||"-"}/><Detail label="주소" value={settings.privacyMasking?maskAddress(selectedOrder.address):selectedOrder.address||"-"}/><Detail label="상품" value={`${selectedOrder.product} · ${selectedOrder.option}`}/><Detail label="예상 출고" value={expectedShip}/><Detail label="예상 도착" value={expectedDelivery}/><Detail label="도매처" value={selectedOrder.supplier}/><Detail label="송장" value={chosenInvoice?.invoice?`${chosenInvoice.carrier} ${chosenInvoice.invoice}`:"미입력"}/><Detail label="예상 순이익" value={money(Math.round(productProfit(selectedOrder,chosenProduct)))}/><Detail label="내부 메모" value={selectedOrder.internalMemo||"없음"}/><Detail label="고객 요청" value={selectedOrder.customerNote||"없음"}/><Detail label="도매처 전달" value={selectedOrder.supplierNote||"없음"}/></div><div className="formActions left"><button className="secondary" onClick={()=>{const v=prompt("고객 요청사항",selectedOrder.customerNote||"");if(v!==null)updateOrder(selectedOrder.id,{customerNote:v})}}>고객 요청 메모</button><button className="secondary" onClick={()=>{const v=prompt("도매처 전달사항",selectedOrder.supplierNote||"");if(v!==null)updateOrder(selectedOrder.id,{supplierNote:v})}}>도매처 전달 메모</button><button className="secondary" onClick={()=>{const v=prompt("내부 메모",selectedOrder.internalMemo||"");if(v!==null)updateOrder(selectedOrder.id,{internalMemo:v})}}>내부 메모</button>{chosenProduct?.automationMode==="수동검토"&&!selectedOrder.manualApproved&&<button className="primary" onClick={()=>updateOrder(selectedOrder.id,{manualApproved:true,purchaseStatus:"발주대기"},"수동 검토 승인")}>수동 검토 승인</button>}{chosenProduct?.alternateSupplier&&<button className="secondary" onClick={()=>updateOrder(selectedOrder.id,{supplierOverride:chosenProduct.alternateSupplier},"대체 도매처 적용")}>대체 도매처: {chosenProduct.alternateSupplier}</button>}</div><div className="riskBox"><b>자동 점검</b>{risks.length?<ul>{risks.map(r=><li key={r}>{r}</li>)}</ul>:<p className="okText">위험 요소 없음</p>}</div><div className="timeline"><b>주문 타임라인</b>{timeline.map((t,i)=><div className="timelineRow" key={i}><span>{new Date(t.time).toLocaleString("ko-KR")}</span><strong>{t.label}</strong></div>)}</div></div>}
   </>;
 }
 
-function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInvoices, purchaseBatches, setPurchaseBatches, purchaseDispatches, setPurchaseDispatches, settings, pushActivity, pushNotification }) {
+function PurchasePage({ returnCases, orders, setOrders, products, suppliers, invoices, setInvoices, purchaseBatches, setPurchaseBatches, purchaseDispatches, setPurchaseDispatches, settings, pushActivity, pushNotification }) {
   const [selected, setSelected] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [sharingKey, setSharingKey] = useState("");
-  const eligible = orders.filter((o) => !o.marketing && !o.hold && o.supplier !== "미연결" && o.purchaseStatus === "발주대기");
+  const purchaseBusyRef = useRef(false);
+  const currentPurchaseRef = useRef({ orders, returnCases });
+  currentPurchaseRef.current = { orders, returnCases };
+  const dispatchRecordsRef = useRef(purchaseDispatches);
+  dispatchRecordsRef.current = purchaseDispatches;
+  const dispatchBusyRef = useRef(new Set());
+  const dispatchLimit = Math.min(5, Math.max(1, Math.floor(Number(settings.purchaseDispatchRetryLimit) || 3)));
+  const deliveryConfirmed = (info) => ["전달완료", "자동전송완료"].includes(info.status);
+  const deliveryLabel = (info) => info.status === "공유완료" ? "과거 완료기록 · 전달 미확인" : (info.status || "미전송");
+
+  const blocked = csPurchaseBlocks(returnCases);
+  const eligible = orders.filter((o) => !blocked.has(o.id) && !o.marketing && !o.hold && o.supplier !== "미연결" && o.purchaseStatus === "발주대기");
 
   const toggle = (id) => setSelected((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   const toggleAll = () => setSelected(selected.length === eligible.length ? [] : eligible.map((o) => o.id));
@@ -906,8 +1006,10 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
     if (!product) problems.push("상품 데이터 없음");
     else { if (product.active === false || product.stockout) problems.push("자동화 중지/품절 상품"); if(product.automationMode==="수동검토" && !order.manualApproved) problems.push("상품 수동검토 규칙"); if(productProfit(order,product)<0) problems.push("손해 주문 차단"); }
     if (order.hold) problems.push("보류 주문");
-    if (order.address && addressLooksInvalid(order.address)) problems.push("배송지 확인 필요");
-    if (!Number(order.qty || 0) || Number(order.qty) < 1) problems.push("수량 오류");
+    if (blocked.has(order.id) || /취소|환불/.test(order.channelStatus || "")) problems.push("환불·취소 주문");
+    if (!Number.isFinite(productProfit(order, product))) problems.push("금액 또는 원가 형식 오류");
+    if (!order.address || addressLooksInvalid(order.address)) problems.push("배송지 확인 필요");
+    if (!Number.isSafeInteger(Number(order.qty)) || Number(order.qty) < 1) problems.push("수량 오류");
     if (order.purchaseBatchId) problems.push("기존 발주 묶음 존재");
     return problems;
   };
@@ -938,18 +1040,49 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   const makeSupplierFile = (supplierName, items) => {
     const rows = buildRowsForSupplier(supplierName, items);
     const ws = XLSX.utils.json_to_sheet(rows);
+    const columns = Object.keys(rows[0] || {});
+    const displayWidth = (value) => [...String(value ?? "")].reduce((n, ch) => n + (ch.charCodeAt(0) > 255 ? 2 : 1), 0);
+    const widths = columns.map((col) => {
+      const longest = Math.max(displayWidth(col), ...rows.map(row => displayWidth(row[col])));
+      return Math.min(col.includes("주소") ? 48 : col.includes("상품") ? 36 : 28, Math.max(12, longest + 3));
+    });
+    ws["!cols"] = widths.map(wch => ({ wch }));
+    ws["!rows"] = [{ hpt: 30 }, ...rows.map(row => ({
+      hpt: Math.max(30, ...columns.map((col, i) => 18 * Math.ceil(displayWidth(row[col]) / Math.max(1, widths[i] - 2)) + 10))
+    }))];
+    const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        if (!cell) continue;
+        if (r > 0 && /번호|연락처|전화/.test(columns[c])) {
+          cell.v = String(cell.v ?? ""); cell.t = "s"; cell.z = "@";
+        }
+        cell.s = {
+          font: { name: "맑은 고딕", sz: 11, bold: r === 0, color: { rgb: r === 0 ? "FFFFFF" : "202020" } },
+          fill: { fgColor: { rgb: r === 0 ? "36305C" : "FFFFFF" } },
+          alignment: { vertical: "center", horizontal: "left", wrapText: true },
+          border: Object.fromEntries(["top", "bottom", "left", "right"].map(edge => [edge, { style: "thin", color: { rgb: "D0D0D0" } }]))
+        };
+      }
+    }
     const wb = XLSX.utils.book_new();
     const supplierData = suppliers.find((s) => s.name === supplierName);
-    XLSX.utils.book_append_sheet(wb, ws, supplierData?.orderSheetName || "발주서");
+    XLSX.utils.book_append_sheet(wb, ws, safeSheetName(supplierData?.orderSheetName || "발주서"));
     const array = XLSX.write(wb, { type: "array", bookType: "xlsx" });
     const base = (supplierData?.orderFileName || "{도매처}_{날짜}_발주서").replace("{도매처}", supplierName).replace("{날짜}", new Date().toISOString().slice(0, 10));
-    const filename = `${base}.xlsx`;
+    const filename = `${safeFileName(base)}.xlsx`;
     const blob = new Blob([array], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     const file = new File([blob], filename, { type: blob.type });
     return { array, blob, file, filename };
   };
 
   const batchSupplierOrders = (batch, supplierName) => orders.filter((o) => batch.orderIds.includes(o.id) && o.supplier === supplierName);
+  const checkPurchaseBlock = (items) => {
+    if (!items.some(o => blocked.has(o.id))) return false;
+    alert("환불 또는 취소 처리된 주문이 포함돼 있어 이 도매처 발주서를 사용할 수 없습니다.");
+    return true;
+  };
   const deliveryInfo = (batch, supplierName) => batch.deliveries?.[supplierName] || { status: "미전송", sentAt: "", method: suppliers.find((s) => s.name === supplierName)?.method || "수동" };
 
   const renderShareMessage = (batch, supplierName, count) => {
@@ -959,19 +1092,45 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   };
 
   const upsertDispatch = (record) => {
-    setPurchaseDispatches((prev) => {
-      const exists = prev.some((item) => item.id === record.id);
-      const next = exists ? prev.map((item) => item.id === record.id ? { ...item, ...record } : item) : [record, ...prev];
-      return next.slice(0, 200);
-    });
+    const prev = dispatchRecordsRef.current;
+    const exists = prev.some((item) => item.id === record.id);
+    const next = (exists ? prev.map((item) => item.id === record.id ? { ...item, ...record } : item) : [record, ...prev]).slice(0, 200);
+    dispatchRecordsRef.current = next;
+    setPurchaseDispatches(next);
   };
 
   const dispatchSupplierFile = async (batchId, supplierName, items, retry = false) => {
     const supplier = suppliers.find((s) => s.name === supplierName);
+    if (checkPurchaseBlock(items)) return { ok: false, blocked: true };
     const dispatchId = `${batchId}:${supplierName}`;
-    const previous = purchaseDispatches.find((item) => item.id === dispatchId);
-    const attempt = retry ? Number(previous?.attempt || 0) + 1 : 1;
-    const maxRetry = Math.max(1, Number(settings.purchaseDispatchRetryLimit || 3));
+    const previous = dispatchRecordsRef.current.find((item) => item.id === dispatchId);
+    if (dispatchBusyRef.current.has(dispatchId)) return { ok: false, blocked: true };
+    if (["전송완료", "테스트완료", "전송중", "결과확인필요", "취소"].includes(previous?.status)) {
+      alert("이미 완료됐거나 전송 중인 건입니다. 중복 요청하지 않습니다.");
+      return { ok: false, blocked: true };
+    }
+    const batch = purchaseBatches.find((b) => b.id === batchId);
+    if (batch && batch.status !== "발주완료") return { ok: false, blocked: true };
+    if (batch && deliveryConfirmed(deliveryInfo(batch, supplierName))) {
+      alert("이미 전달완료로 기록된 건입니다. 중복 요청하지 않습니다.");
+      return { ok: false, blocked: true };
+    }
+    const attempt = Math.max(0, Number(previous?.attempt) || 0) + 1;
+    const maxRetry = dispatchLimit;
+    if (attempt > maxRetry) {
+      alert(`전송 시도 한도 ${maxRetry}회에 도달했습니다. 전송 이력을 확인하세요.`);
+      return { ok: false, blocked: true };
+    }
+    dispatchBusyRef.current.add(dispatchId);
+    try {
+    if (settings.systemMode === "테스트") {
+      const { filename } = makeSupplierFile(supplierName, items);
+      upsertDispatch({ id: dispatchId, batchId, supplierName, status: "테스트완료", attempt,
+        fileName: filename, updatedAt: nowIso(), message: "전송 흐름 시험 완료 · 실제 도매처 전송 없음" });
+      markDelivery(batchId, supplierName, "테스트완료", { method: "테스트" });
+      pushActivity("발주 전송 테스트", batchId + " · " + supplierName + " · 외부 전송 없음");
+      return { ok: true, simulated: true };
+    }
     if (!supplier?.dispatchEnabled) {
       upsertDispatch({ id: dispatchId, batchId, supplierName, status: "수동전송", attempt, updatedAt: nowIso(), message: "도매처 자동전송이 꺼져 있습니다." });
       return { ok: false, manual: true };
@@ -995,24 +1154,27 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
       pushActivity("도매처 자동전송", `${batchId} · ${supplierName} · ${items.length}건 전송 완료`);
       return { ok: true };
     } catch (error) {
-      const finalStatus = attempt >= maxRetry ? "전송실패" : "재시도대기";
+      const finalStatus = ["NOT_CONFIGURED", "INVALID_PAYLOAD", "FILE_TOO_LARGE", "INVALID_FILE", "AUTH_REQUIRED", "BAD_ORIGIN"].includes(error?.code) ? "설정필요" : "결과확인필요";
       upsertDispatch({ id: dispatchId, batchId, supplierName, status: finalStatus, attempt, fileName: filename, updatedAt: nowIso(), message: error?.message || "전송 실패" });
       markDelivery(batchId, supplierName, finalStatus, { method: "자동전송" });
       pushNotification("발주 자동전송 실패", `${supplierName} · ${error?.message || "서버 연결 실패"}`, "발주 관리", "danger");
       return { ok: false, error };
     }
+    } finally {
+      dispatchBusyRef.current.delete(dispatchId);
+    }
   };
 
   const retryDispatch = async (item) => {
     const batch = purchaseBatches.find((b) => b.id === item.batchId);
-    if (!batch) return alert("발주 묶음을 찾을 수 없습니다.");
+    if (!batch || batch.status !== "발주완료") return alert("유효한 발주 묶음을 찾을 수 없습니다.");
     const items = batchSupplierOrders(batch, item.supplierName);
     if (!items.length) return alert("해당 도매처 주문이 없습니다.");
     await dispatchSupplierFile(batch.id, item.supplierName, items, true);
   };
 
   const markDelivery = (batchId, supplierName, status, extra = {}) => {
-    setPurchaseBatches((prev) => prev.map((batch) => batch.id === batchId ? {
+    setPurchaseBatches((prev) => prev.map((batch) => batch.id === batchId && batch.status === "발주완료" && !(deliveryConfirmed(deliveryInfo(batch, supplierName)) && !["전달완료", "자동전송완료"].includes(status)) ? {
       ...batch,
       deliveries: {
         ...(batch.deliveries || {}),
@@ -1021,7 +1183,24 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
     } : batch));
   };
 
+  const confirmSupplierDelivery = (batch, supplierName) => {
+    if (checkPurchaseBlock(batchSupplierOrders(batch, supplierName))) return;
+    const info = deliveryInfo(batch, supplierName);
+    if (deliveryConfirmed(info)) return;
+    const test = settings.systemMode === "테스트";
+    const question = test
+      ? `${supplierName} · ${batch.id}\n테스트용 전달 확인을 기록할까요? 실제 도매처 전달완료로 처리하지 않습니다.`
+      : `${supplierName} · ${batch.id}\n해당 오픈채팅방에 올바른 발주서와 메시지를 실제로 전송했나요? 파일 저장이나 공유창 열기만 했다면 취소하세요.`;
+    if (!window.confirm(question)) return;
+    markDelivery(batch.id, supplierName, test ? "전달확인(테스트)" : "전달완료", {
+      sentAt: test ? "" : nowIso(), confirmedAt: nowIso(),
+      confirmationMode: test ? "test" : "manual", method: test ? "테스트" : "수동 전달 확인",
+    });
+    pushActivity(test ? "발주 전달 확인 테스트" : "도매처 전달 수동 확인", `${batch.id} · ${supplierName}`);
+  };
+
   const copyShareMessage = async (batch, supplierName) => {
+    if (checkPurchaseBlock(batchSupplierOrders(batch, supplierName))) return;
     const items = batchSupplierOrders(batch, supplierName);
     const text = renderShareMessage(batch, supplierName, items.length);
     try {
@@ -1033,6 +1212,7 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   };
 
   const downloadSupplierFile = (batch, supplierName) => {
+    if (checkPurchaseBlock(batchSupplierOrders(batch, supplierName))) return;
     const items = batchSupplierOrders(batch, supplierName);
     if (!items.length) return alert("해당 도매처 주문이 없습니다.");
     const { blob, filename } = makeSupplierFile(supplierName, items);
@@ -1041,6 +1221,7 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   };
 
   const shareSupplierFile = async (batch, supplierName) => {
+    if (checkPurchaseBlock(batchSupplierOrders(batch, supplierName))) return;
     const key = `${batch.id}-${supplierName}`;
     if (sharingKey) return;
     const items = batchSupplierOrders(batch, supplierName);
@@ -1054,8 +1235,11 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
       const canShareFiles = Boolean(navigator.share) && (!navigator.canShare || navigator.canShare(shareData));
       if (canShareFiles) {
         await navigator.share(shareData);
-        markDelivery(batch.id, supplierName, "공유완료", { sentAt: nowIso(), method: supplier?.method || "공유" });
-        pushActivity("도매처 발주 공유", `${batch.id} · ${supplierName} · ${items.length}건 공유 완료`);
+        if (!deliveryConfirmed(deliveryInfo(batch, supplierName))) {
+          markDelivery(batch.id, supplierName, "전달확인필요", { sentAt: "", sharedAt: nowIso(), method: supplier?.method || "공유" });
+        }
+        pushActivity("발주서 공유창 작업 종료", `${batch.id} · ${supplierName} · 실제 전달 여부 별도 확인 필요`);
+        alert("공유창 작업이 끝났습니다. 파일 저장만으로는 전달완료가 아닙니다. 오픈채팅방에서 실제 전송한 뒤 전달 확인을 눌러주세요.");
       } else {
         saveBlob(blob, filename);
         try { await navigator.clipboard.writeText(text); } catch {}
@@ -1082,7 +1266,8 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   };
 
   const createPurchaseZip = async () => {
-    if (processing) return;
+    if (settings.systemMode === "실운영") return alert("실운영 발주는 서버 자동화가 처리합니다. 설정에서 서버 연결·원가 한도와 처리 결과를 확인하세요.");
+    if (processing || purchaseBusyRef.current) return;
     const targets = selectedOrders;
     if (!targets.length) return alert("발주할 주문을 선택해주세요.");
     if (selectedIssues.length) return alert(`발주 전 검증에 실패했습니다.\n\n${selectedIssues.slice(0, 10).map((x) => `${x.id}: ${x.message}`).join("\n")}\n\n문제를 해결한 뒤 다시 시도해주세요.`);
@@ -1090,19 +1275,28 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
     if (safety.length && !window.confirm(`고가/다량 주문 ${safety.length}건이 포함돼 있습니다.\n${safety.map(o=>`${o.id} · ${money(o.saleAmount)} · ${o.qty}개`).slice(0,8).join("\n")}\n\n검토 후 계속할까요?`)) return;
     if (!window.confirm(`${targets.length}건을 도매처별 발주서로 생성하고 발주완료 상태로 바꿀까요?`)) return;
 
+    purchaseBusyRef.current = true;
     setProcessing(true);
-    const grouped = targets.reduce((acc, o) => ((acc[o.supplier] ||= []).push(o), acc), {});
+    let committed = false;
+    try {
+    const grouped = targets.reduce((acc, o) => ((acc[o.supplier] ||= []).push(o), acc), Object.create(null));
     const zip = new JSZip();
+    const usedNames = new Set();
     Object.entries(grouped).forEach(([supplierName, items]) => {
       const { array, filename } = makeSupplierFile(supplierName, items);
+      if (usedNames.has(filename.toLowerCase())) throw new Error("도매처별 발주서 파일명이 겹칩니다. 도매처 관리에서 파일명을 다르게 설정하세요.");
+      usedNames.add(filename.toLowerCase());
       zip.file(filename, array);
     });
 
     const zipBlob = await zip.generateAsync({ type: "blob" });
+    const live = currentPurchaseRef.current;
+    const liveBlocked = csBlockedIds(live.returnCases);
+    if (targets.some(t => { const o = live.orders.find(o => o.id === t.id); return !o || o.hold || liveBlocked.has(o.id) || o.purchaseBatchId || o.purchaseStatus !== "발주대기" || o.supplier !== t.supplier || o.qty !== t.qty || o.address !== t.address; })) throw new Error("생성 중 주문 상태가 변경됐습니다. 다시 선택해주세요.");
     const batchId = uid("PO");
     saveBlob(zipBlob, `SellerFlow_${batchId}_도매처별_발주서.zip`);
 
-    setOrders((prev) => prev.map((o) => selected.includes(o.id) ? { ...o, purchaseStatus: "발주완료", invoiceStatus: "송장대기", purchaseBatchId: batchId } : o));
+    setOrders((prev) => prev.map((o) => targets.some(t => t.id === o.id) ? { ...o, purchaseStatus: "발주완료", invoiceStatus: "송장대기", purchaseBatchId: batchId } : o));
     setInvoices((prev) => {
       const next = [...prev];
       targets.forEach((o) => { if (!next.some((r) => r.id === o.id)) next.push({ id: o.id, product: o.product, supplier: o.supplier, carrier: "", invoice: "", status: "송장대기", source: "도매처", updatedAt: nowIso() }); });
@@ -1114,6 +1308,7 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
       return acc;
     }, {});
     setPurchaseBatches((prev) => [{ id: batchId, createdAt: nowIso(), orderIds: targets.map((o) => o.id), suppliers: Object.keys(grouped), status: "발주완료", deliveries }, ...prev]);
+    committed = true;
     pushActivity("발주서 생성", `${targets.length}건 · ${Object.keys(grouped).length}개 도매처 발주서 ZIP 생성`, { batchId });
     if (settings.autoPurchaseDispatch) {
       pushNotification("발주 자동전송 시작", `${Object.keys(grouped).length}개 도매처 전송을 시작합니다.`, "발주 관리");
@@ -1124,15 +1319,20 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
       pushNotification("발주 완료", `${targets.length}건 발주서가 생성됐습니다. 도매처 전송센터에서 각 도매처 파일만 공유하세요.`, "발주 관리");
     }
     setSelected([]);
-    setProcessing(false);
+    } catch (error) { alert(`${committed ? "발주서는 생성됐지만 후속 처리에서 오류가 발생했습니다. 재발주하지 말고 기존 묶음을 확인하세요" : "발주서를 생성하지 못했습니다"}: ${error.message}`); }
+    finally { purchaseBusyRef.current = false; setProcessing(false); }
   };
 
   const cancelBatch = (batch) => {
+    if (batch.serverCreated) return alert("실제 도매처 전달이 완료된 발주입니다. 도매처와 출고 중지 여부를 확인해주세요.");
+    if (batch.status !== "발주완료") return alert("유효한 발주 묶음이 아닙니다.");
+    if (Object.values(batch.deliveries || {}).some(d => ["전송중", "전달완료", "자동전송완료", "결과확인필요"].includes(d.status)) || purchaseDispatches.some(d => d.batchId === batch.id && ["전송중", "전송완료", "결과확인필요"].includes(d.status))) return alert("전송 중이거나 전달된 발주입니다. 도매처 전달 여부와 취소 가능 여부를 먼저 확인하세요.");
     const touched = invoices.some((row) => batch.orderIds.includes(row.id) && (row.carrier || row.invoice || row.status !== "송장대기"));
     if (touched) return alert("송장 입력 또는 등록이 진행된 주문이 포함되어 주문서 전체 취소가 불가능합니다.");
     if (!window.confirm(`${batch.id} 발주 묶음을 취소할까요?`)) return;
     setOrders((prev) => prev.map((o) => batch.orderIds.includes(o.id) ? { ...o, purchaseStatus: "발주대기", invoiceStatus: "송장대기", purchaseBatchId: null } : o));
     setInvoices((prev) => prev.filter((row) => !batch.orderIds.includes(row.id)));
+    setPurchaseDispatches(prev => prev.map(d => d.batchId === batch.id ? { ...d, status: "취소", message: "발주 묶음 취소로 재전송 차단" } : d));
     setPurchaseBatches((prev) => prev.map((b) => b.id === batch.id ? { ...b, status: "취소" } : b));
     pushActivity("발주 묶음 취소", `${batch.id} · ${batch.orderIds.length}건 복구`);
   };
@@ -1150,12 +1350,12 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
       </tbody></table></div></div>
 
       <div className="panel dispatchQueue"><div className="panelHead"><div><h2>자동 발주 전송 큐</h2><p>발주서 생성 직후 도매처별 파일을 서버 전송 큐로 보내고 성공·실패·재시도를 기록합니다.</p></div><span className="muted">자동전송 {settings.autoPurchaseDispatch ? "켜짐" : "꺼짐"}</span></div>
-        {purchaseDispatches.length === 0 ? <div className="emptyLine">아직 자동 전송 기록이 없습니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>상태</th><th>시도</th><th>최근 결과</th><th>작업</th></tr></thead><tbody>{purchaseDispatches.slice(0,20).map((item)=><tr key={item.id}><td><b>{item.batchId}</b></td><td>{item.supplierName}</td><td><span className={`dispatchStatus ${item.status === "전송완료" ? "sent" : item.status.includes("실패") || item.status === "설정필요" ? "failed" : "pending"}`}>{item.status}</span></td><td>{item.attempt || 0}/{settings.purchaseDispatchRetryLimit || 3}</td><td>{item.message || "-"}<small className="subText">{item.updatedAt ? new Date(item.updatedAt).toLocaleString("ko-KR") : ""}</small></td><td>{item.status !== "전송완료" && <button className="secondary" onClick={()=>retryDispatch(item)}>재시도</button>}</td></tr>)}</tbody></table></div>}
+        {purchaseDispatches.length === 0 ? <div className="emptyLine">아직 자동 전송 기록이 없습니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>상태</th><th>시도</th><th>최근 결과</th><th>작업</th></tr></thead><tbody>{purchaseDispatches.slice(0,20).map((item)=><tr key={item.id}><td><b>{item.batchId}</b></td><td>{item.supplierName}</td><td><span className={`dispatchStatus ${item.status === "전송완료" ? "sent" : item.status.includes("실패") || item.status === "설정필요" ? "failed" : "pending"}`}>{item.status}</span></td><td>{item.attempt || 0}/{dispatchLimit}</td><td>{item.message || "-"}<small className="subText">{item.updatedAt ? new Date(item.updatedAt).toLocaleString("ko-KR") : ""}</small></td><td>{!["전송완료", "테스트완료"].includes(item.status) && <button className="secondary" disabled={["전송중", "취소", "결과확인필요"].includes(item.status) || Number(item.attempt || 0) >= dispatchLimit || deliveryConfirmed(deliveryInfo(purchaseBatches.find(b=>b.id===item.batchId) || {}, item.supplierName))} onClick={()=>retryDispatch(item)}>{Number(item.attempt || 0) >= dispatchLimit ? "시도 한도 도달" : "재시도"}</button>}</td></tr>)}</tbody></table></div>}
         <p className="securityNote">브라우저에는 API Secret을 저장하지 않습니다. 실제 외부 전송은 Vercel 서버의 환경변수로 연결한 전송 어댑터가 처리합니다.</p>
       </div>
 
-      <div className="panel supplierDeliveryPanel"><div className="panelHead"><div><h2>도매처 전송센터</h2><p>ZIP 전체가 아니라 각 도매처의 전용 XLSX만 공유합니다. iPad/모바일에서는 공유 버튼으로 카카오톡 공유창을 바로 열 수 있습니다.</p></div></div>
-        {deliveryRows.length === 0 ? <div className="emptyLine">발주서를 생성하면 도매처별 전송 작업이 여기에 나타납니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>주문수</th><th>전달방식</th><th>대상</th><th>전송상태</th><th>작업</th></tr></thead><tbody>{deliveryRows.map(({batch,supplierName,items,info,supplier}) => { const key=`${batch.id}-${supplierName}`; return <tr key={key}><td><b>{batch.id}</b><small className="subText">{new Date(batch.createdAt).toLocaleString("ko-KR")}</small></td><td><b>{supplierName}</b></td><td>{items.length}건</td><td>{supplier?.method || info.method || "수동"}</td><td>{supplier?.shareTarget || "미설정"}</td><td><span className={`deliveryStatus ${info.status === "공유완료" ? "sent" : "pending"}`}>{info.status || "미전송"}</span>{info.sentAt && <small className="subText">{new Date(info.sentAt).toLocaleString("ko-KR")}</small>}</td><td className="actions"><button className="primary" disabled={sharingKey===key} onClick={()=>shareSupplierFile(batch,supplierName)}>{sharingKey===key?"공유 중...":info.status==="공유완료"?"다시 공유":"공유"}</button><button className="secondary" onClick={()=>downloadSupplierFile(batch,supplierName)}>파일</button><button className="secondary" onClick={()=>copyShareMessage(batch,supplierName)}>메시지</button>{info.status!=="공유완료"&&<button className="secondary" onClick={()=>markDelivery(batch.id,supplierName,"공유완료",{sentAt:nowIso(),method:supplier?.method||"수동"})}>완료표시</button>}</td></tr>; })}</tbody></table></div>}
+      <div className="panel supplierDeliveryPanel"><div className="panelHead"><div><h2>도매처 전송센터</h2><p>ZIP 전체가 아니라 각 도매처의 전용 XLSX만 공유합니다. 오픈채팅은 파일을 저장한 뒤 채팅방 안에서 첨부하세요. 공유창 작업과 실제 전달 확인은 별도로 기록합니다.</p></div></div>
+        {deliveryRows.length === 0 ? <div className="emptyLine">발주서를 생성하면 도매처별 전송 작업이 여기에 나타납니다.</div> : <div className="table"><table><thead><tr><th>발주번호</th><th>도매처</th><th>주문수</th><th>전달방식</th><th>대상</th><th>전송상태</th><th>작업</th></tr></thead><tbody>{deliveryRows.map(({batch,supplierName,items,info,supplier}) => { const key=`${batch.id}-${supplierName}`; return <tr key={key}><td><b>{batch.id}</b><small className="subText">{new Date(batch.createdAt).toLocaleString("ko-KR")}</small></td><td><b>{supplierName}</b></td><td>{items.length}건</td><td>{supplier?.method || info.method || "수동"}</td><td>{supplier?.shareTarget || "미설정"}</td><td><span className={`deliveryStatus ${deliveryConfirmed(info) ? "sent" : "pending"}`}>{items.some(o => blocked.has(o.id)) ? "CS 발주차단" : deliveryLabel(info)}</span>{info.sentAt && <small className="subText">{new Date(info.sentAt).toLocaleString("ko-KR")}</small>}</td><td className="actions"><button className="primary" disabled={sharingKey===key || items.some(o => blocked.has(o.id))} onClick={()=>shareSupplierFile(batch,supplierName)}>{sharingKey===key?"공유 중...":deliveryConfirmed(info)?"다시 공유":"공유"}</button><button className="secondary" onClick={()=>downloadSupplierFile(batch,supplierName)}>파일</button><button className="secondary" onClick={()=>copyShareMessage(batch,supplierName)}>메시지</button>{!deliveryConfirmed(info)&&<button className="secondary" disabled={settings.systemMode === "테스트" && info.status === "전달확인(테스트)"} onClick={()=>confirmSupplierDelivery(batch,supplierName)}>{settings.systemMode === "테스트" ? "전달 확인(테스트)" : "실제 전달 확인"}</button>}</td></tr>; })}</tbody></table></div>}
         <p className="securityNote">개인정보 보호를 위해 도매처에는 자기 주문이 들어간 XLSX만 공유하세요. 전체 ZIP을 카카오톡 방에 보내는 기능은 의도적으로 제공하지 않습니다.</p>
       </div>
 
@@ -1164,7 +1364,7 @@ function PurchasePage({ orders, setOrders, products, suppliers, invoices, setInv
   );
 }
 
-function InvoicePage({ orders, setOrders, invoices, setInvoices, suppliers, invoiceLogs, setInvoiceLogs, invoiceFilter, globalSearch, pushActivity, pushNotification, settings }) {
+function InvoicePage({ returnCases, orders, setOrders, invoices, setInvoices, suppliers, invoiceLogs, setInvoiceLogs, invoiceFilter, globalSearch, pushActivity, pushNotification, settings }) {
   const [selected, setSelected] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [supplierFilter, setSupplierFilter] = useState("all");
@@ -1172,17 +1372,20 @@ function InvoicePage({ orders, setOrders, invoices, setInvoices, suppliers, invo
   const [inboxResults, setInboxResults] = useState([]);
   const [lastInboxAt, setLastInboxAt] = useState("");
   const fileRef = useRef(null);
+  const busyRef = useRef(false);
+  const latestRef = useRef({ orders, invoices, returnCases });
+  latestRef.current = { orders, invoices, returnCases };
   const q = (search || globalSearch).trim().toLowerCase();
 
   const duplicateInvoice = (invoiceNumber, excludeId = "") => {
-    const value = String(invoiceNumber || "").trim();
+    const value = normalizeText(invoiceNumber);
     if (!value) return false;
-    return invoices.some((r) => r.id !== excludeId && String(r.invoice || "").trim() === value);
+    return invoices.some((r) => r.id !== excludeId && normalizeText(r.invoice) === value);
   };
 
   const rowIssues = (row) => {
-    const issues = [];
-    if (row.invoice && !row.carrier) issues.push("택배사 누락");
+    const issues = fulfillmentIssues(orders.find(o => o.id === row.id), row, returnCases);
+    if (row.invoice || row.carrier) issues.push(...invoiceValueIssues(row.carrier, row.invoice));
     if (row.invoice && duplicateInvoice(row.invoice, row.id)) issues.push("중복 송장");
     return issues;
   };
@@ -1190,7 +1393,7 @@ function InvoicePage({ orders, setOrders, invoices, setInvoices, suppliers, invo
   const rows = invoices.filter((row) => {
     if (invoiceFilter === "waiting" && row.status !== "송장대기") return false;
     if (invoiceFilter === "ready" && row.status !== "등록대기") return false;
-    if (invoiceFilter === "done" && row.status !== "등록완료(테스트)") return false;
+    if (invoiceFilter === "done" && !String(row.status).startsWith("등록완료")) return false;
     if (supplierFilter !== "all" && row.supplier !== supplierFilter) return false;
     if (q && ![row.id, row.product, row.supplier, row.carrier, row.invoice].join(" ").toLowerCase().includes(q)) return false;
     return true;
@@ -1198,31 +1401,47 @@ function InvoicePage({ orders, setOrders, invoices, setInvoices, suppliers, invo
 
   const addLog = (type, row, message) => setInvoiceLogs((prev) => [{ id: uid("INVLOG"), time: nowIso(), orderId: row.id, type, message }, ...prev].slice(0, 200));
   const syncOrderStatus = (id, status) => setOrders((prev) => prev.map((o) => o.id === id ? { ...o, invoiceStatus: status } : o));
-  const selectable = rows.filter((r) => r.carrier && r.invoice && r.status !== "등록완료(테스트)" && rowIssues(r).length === 0);
+  const selectable = rows.filter((r) => r.carrier && r.invoice && !String(r.status).startsWith("등록완료") && rowIssues(r).length === 0);
   const toggle = (id) => setSelected((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   const toggleAll = () => setSelected(selected.length === selectable.length ? [] : selectable.map((r) => r.id));
 
   const edit = (row) => {
-    if (row.status === "등록완료(테스트)") return alert("먼저 등록 취소를 해주세요.");
+    if (String(row.status).startsWith("등록완료")) return alert("먼저 등록 취소를 해주세요.");
     const carrier = window.prompt("택배사를 입력하세요.", row.carrier || "");
     if (carrier === null) return;
     const invoice = window.prompt("운송장번호를 입력하세요.", row.invoice || "");
     if (invoice === null) return;
-    if (!carrier.trim() || !invoice.trim()) return alert("택배사와 운송장번호를 모두 입력해주세요.");
+    if (!carrier.trim() && !invoice.trim()) {
+      if (!window.confirm(`${row.id} 택배사와 송장번호를 지우고 송장대기로 돌릴까요?`)) return;
+      setInvoices(prev => prev.map(r => r.id === row.id ? { ...r, carrier: "", invoice: "", status: "송장대기", updatedAt: nowIso() } : r));
+      syncOrderStatus(row.id, "송장대기");
+      setSelected(prev => prev.filter(id => id !== row.id));
+      addLog("송장 초기화", row, "잘못 입력된 값을 지우고 송장대기로 복구");
+      return;
+    }
+    const issues = [...invoiceValueIssues(carrier, invoice), ...fulfillmentIssues(orders.find(o => o.id === row.id), row, returnCases)];
+    if (issues.length) return alert(issues.join("\n"));
     if (duplicateInvoice(invoice, row.id)) return alert("이미 다른 주문에 사용 중인 운송장번호입니다. 중복 등록을 차단했습니다.");
-    setInvoices((prev) => prev.map((r) => r.id === row.id ? { ...r, carrier: carrier.trim(), invoice: invoice.trim(), status: "등록대기", updatedAt: nowIso() } : r));
+    setInvoices((prev) => prev.map((r) => r.id === row.id ? { ...r, carrier: carrierName(carrier), invoice: normalizeText(invoice), status: "등록대기", updatedAt: nowIso() } : r));
     syncOrderStatus(row.id, "쿠팡 등록 가능");
     addLog("수기 송장 입력", row, `${carrier.trim()} / ${invoice.trim()}`);
   };
 
   const registerRows = (targets) => {
-    if (processing) return;
+    if (processing || busyRef.current) return;
+    if (settings.systemMode === "실운영") {
+      if (!window.SellerFlowRuntime?.enabled || !settings.serverAutomationEnabled) return alert("서버 자동화 연결과 설정을 먼저 확인하세요.");
+      window.SellerFlowRuntime.saveNow().then(() => alert("서버에 송장 정보를 저장했습니다. 예약 작업의 실제 등록 결과가 반영될 때까지 기다려주세요.")).catch(e => alert(e.message));
+      return;
+    }
+    if (settings.systemMode !== "테스트") return alert("실운영 모드와 서버 연결이 필요합니다.");
     if (settings.apiOutage) return alert("API 장애모드입니다. 쿠팡 등록 작업을 중단했습니다.");
-    const invalid = targets.filter((r) => rowIssues(r).length);
+    const invalid = targets.filter((r) => rowIssues(r).length || invoiceValueIssues(r.carrier, r.invoice).length);
     if (invalid.length) return alert(`등록 전 검증 실패 ${invalid.length}건\n\n${invalid.slice(0, 8).map((r) => `${r.id}: ${rowIssues(r).join(", ")}`).join("\n")}`);
-    const actual = targets.filter((r) => r.carrier && r.invoice && r.status !== "등록완료(테스트)");
+    const actual = targets.filter((r) => r.carrier && r.invoice && !String(r.status).startsWith("등록완료"));
     if (!actual.length) return alert("등록 가능한 송장이 없습니다.");
-    if (!window.confirm(`${actual.length}건을 ${settings.systemMode === "테스트" ? "등록완료(테스트)" : "실운영 준비"} 상태로 전환할까요?\n\n※ 현재 파일에는 실제 WING API 전송 코드가 없어 외부 전송은 하지 않습니다.`)) return;
+    if (!window.confirm(`${actual.length}건을 ${settings.systemMode === "테스트" ? "등록완료(테스트)" : "실운영 준비"} 상태로 전환할까요?\n\n※ 테스트 모드에서는 실제 쿠팡으로 전송하지 않습니다.`)) return;
+    busyRef.current = true;
     setProcessing(true);
     setInvoices((prev) => prev.map((r) => actual.some((t) => t.id === r.id) ? { ...r, status: "등록완료(테스트)", updatedAt: nowIso() } : r));
     setOrders((prev) => prev.map((o) => actual.some((t) => t.id === o.id) ? { ...o, invoiceStatus: "등록완료(테스트)" } : o));
@@ -1230,12 +1449,14 @@ function InvoicePage({ orders, setOrders, invoices, setInvoices, suppliers, invo
     pushActivity("송장 등록", `${actual.length}건 쿠팡 등록 완료(테스트)`);
     pushNotification("쿠팡 등록 완료", `${actual.length}건 송장 등록이 완료됐습니다.`, "운송장 관리");
     setSelected([]);
+    busyRef.current = false;
     setProcessing(false);
   };
 
   const cancelRegister = (row) => {
-    if (row.status !== "등록완료(테스트)") return;
-    if (!window.confirm(`${row.id} 등록완료 상태를 되돌릴까요?`)) return;
+    if (row.status === "등록완료") return alert("실제 쿠팡 등록은 화면에서 되돌릴 수 없습니다. WING 상태와 송장 수정 절차를 확인하세요.");
+    if (!String(row.status).startsWith("등록완료")) return;
+    if (!window.confirm(`${row.id} 등록완료 상태를 되돌릴까요? 송장 값은 남습니다. 값을 지우려면 수정에서 두 칸을 모두 비워주세요.`)) return;
     setInvoices((prev) => prev.map((r) => r.id === row.id ? { ...r, status: r.invoice ? "등록대기" : "송장대기", updatedAt: nowIso() } : r));
     syncOrderStatus(row.id, row.invoice ? "쿠팡 등록 가능" : "송장대기");
     addLog("등록 취소", row, "등록완료 상태를 등록대기로 되돌렸습니다.");
@@ -1248,92 +1469,38 @@ function InvoicePage({ orders, setOrders, invoices, setInvoices, suppliers, invo
     XLSX.writeFile(wb, "SellerFlow_송장입력_템플릿.xlsx");
   };
 
-  const supplierFromFileName = (name) => {
-    const normalized = normalizeHeader(name);
-    return suppliers.find((supplier) => normalized.includes(normalizeHeader(supplier.name)))?.name || "";
-  };
-
-  const parseInboxFile = async (file) => {
-    const rawRows = sheetRowsFromArrayBuffer(await file.arrayBuffer());
-    const fileSupplier = supplierFromFileName(file.name);
-    const supplierData = suppliers.find((s) => s.name === fileSupplier);
-    const orderCandidates = [supplierData?.invoiceMapOrderId, ...suppliers.map((s) => s.invoiceMapOrderId), "주문번호", "orderid", "주문ID", "주문코드", "주문번호(쿠팡)"].filter(Boolean);
-    const carrierCandidates = [supplierData?.invoiceMapCarrier, ...suppliers.map((s) => s.invoiceMapCarrier), "택배사", "택배사명", "carrier", "배송사"].filter(Boolean);
-    const invoiceCandidates = [supplierData?.invoiceMapInvoice, ...suppliers.map((s) => s.invoiceMapInvoice), "운송장번호", "송장번호", "invoice", "trackingnumber", "운송장"].filter(Boolean);
-
-    const entries = rawRows.map((row, index) => ({
-      fileName: file.name,
-      rowNo: index + 2,
-      id: String(findCell(row, orderCandidates, 0)).trim(),
-      carrier: String(findCell(row, carrierCandidates, 1)).trim(),
-      invoice: String(findCell(row, invoiceCandidates, 2)).trim(),
-    })).filter((r) => r.id || r.invoice || r.carrier);
-
-    // 파일명에 도매처명이 명확히 들어간 경우에만 그 도매처를 강제 검증합니다.
-    // 일반 파일은 각 행의 주문번호로 실제 도매처를 판단하므로 여러 도매처가 섞여 있어도 처리됩니다.
-    const matchedSuppliers = [...new Set(entries.map((entry) => invoices.find((x) => x.id === entry.id)?.supplier).filter(Boolean))];
-    const detectedSupplier = fileSupplier || (matchedSuppliers.length === 1 ? matchedSuppliers[0] : matchedSuppliers.length > 1 ? "혼합 파일" : "자동판별 실패");
-    return { fileName: file.name, fileSupplier, detectedSupplier, entries };
-  };
-
   const uploadInvoiceFiles = async (fileList) => {
     const files = Array.from(fileList || []);
-    if (!files.length || processing) return;
+    if (!files.length || processing || busyRef.current) return;
+    if (files.length > 20 || files.reduce((sum, f) => sum + f.size, 0) > 30 * 1024 * 1024) return alert("한 번에 20개·합계 30MB 이하로 불러오세요.");
+    busyRef.current = true;
     setProcessing(true);
     try {
-      const parsedFiles = [];
-      for (const file of files) parsedFiles.push(await parseInboxFile(file));
-      const all = parsedFiles.flatMap((file) => file.entries.map((entry) => ({ ...entry, fileSupplier: file.fileSupplier, detectedSupplier: file.detectedSupplier })));
-      const uploadInvoiceCounts = {};
-      const uploadOrderCounts = {};
-      all.forEach((r) => {
-        if (r.invoice) uploadInvoiceCounts[r.invoice] = (uploadInvoiceCounts[r.invoice] || 0) + 1;
-        if (r.id) uploadOrderCounts[r.id] = (uploadOrderCounts[r.id] || 0) + 1;
-      });
-
-      const resultByFile = new Map(parsedFiles.map((file) => [file.fileName, { fileName: file.fileName, supplier: file.detectedSupplier, total: file.entries.length, matched: 0, failed: 0, errors: [] }]));
-      const valid = [];
-      all.forEach((r) => {
-        const result = resultByFile.get(r.fileName);
-        const order = orders.find((x) => x.id === r.id);
-        const target = invoices.find((x) => x.id === r.id);
-        let error = "";
-        if (!r.id) error = "주문번호 없음";
-        else if (!order) error = "SellerFlow 주문번호 없음";
-        else if (!target) error = `아직 송장대기 대상 아님(${order.purchaseStatus || "상태확인"})`;
-        else if (!r.carrier || !r.invoice) error = "택배사/송장번호 누락";
-        else if (uploadOrderCounts[r.id] > 1) error = "여러 파일에 같은 주문번호 중복";
-        else if (uploadInvoiceCounts[r.invoice] > 1) error = "업로드 파일 사이 송장번호 중복";
-        else if (duplicateInvoice(r.invoice, r.id)) error = "기존 데이터와 송장번호 중복";
-        else if (r.fileSupplier && target.supplier && target.supplier !== r.fileSupplier) error = `파일명 도매처 불일치(${target.supplier})`;
-
-        if (error) {
-          result.failed += 1;
-          if (result.errors.length < 6) result.errors.push(`${r.rowNo}행 ${r.id || "-"}: ${error}`);
-        } else {
-          result.matched += 1;
-          valid.push(r);
-        }
-      });
-
-      const validMap = new Map(valid.map((r) => [r.id, r]));
-      setInvoices((prev) => prev.map((row) => {
+      const parsed = [];
+      for (const file of files) {
+        try { parsed.push(await parseInvoiceFile(file, XLSX, suppliers)); }
+        catch (error) { parsed.push({ fileName: file.name, entries: [], error: error.message }); }
+      }
+      const latest = latestRef.current;
+      const { results, valid } = planInvoiceImport(parsed, latest.orders, latest.invoices, latest.returnCases);
+      const validMap = new Map(valid.map(r => [r.id, r]));
+      setInvoices(prev => prev.map(row => {
         const found = validMap.get(row.id);
         return found ? { ...row, carrier: found.carrier, invoice: found.invoice, status: "등록대기", updatedAt: nowIso() } : row;
       }));
-      setOrders((prev) => prev.map((o) => validMap.has(o.id) ? { ...o, invoiceStatus: "쿠팡 등록 가능" } : o));
-      setSelected(valid.map((r) => r.id));
-      setInboxResults(Array.from(resultByFile.values()));
+      setOrders(prev => prev.map(o => validMap.has(o.id) ? { ...o, invoiceStatus: "쿠팡 등록 가능" } : o));
+      setSelected(valid.map(r => r.id));
+      setInboxResults(results);
       setLastInboxAt(nowIso());
-
-      const failedCount = Array.from(resultByFile.values()).reduce((sum, item) => sum + item.failed, 0);
-      if (failedCount) pushNotification("송장 수신함 점검", `${failedCount}건은 오류함에서 확인이 필요합니다.`, "운송장 관리", "danger");
-      pushActivity("송장 수신함 자동 매칭", `${files.length}개 파일 · ${valid.length}건 자동 매칭 / ${failedCount}건 제외`);
-      alert(`송장 수신함 처리 완료\n파일 ${files.length}개\n자동 매칭 ${valid.length}건\n확인 필요 ${failedCount}건\n\n정상 건은 자동으로 선택됐습니다.`);
-    } catch (error) {
-      console.error(error);
-      alert("송장 파일을 읽는 중 오류가 발생했습니다. XLSX/XLS/CSV 파일인지 확인해주세요.");
-    } finally {
+      const failed = results.reduce((n, r) => n + r.failed, 0);
+      const skipped = results.reduce((n, r) => n + r.skipped, 0);
+      valid.forEach(r => addLog("송장 자동매칭", r, `${r.fileName} · ${r.carrier} / ${r.invoice}`));
+      pushActivity("송장 파일 검증", `${files.length}개 파일 · 반영 ${valid.length}건 / 동일값 생략 ${skipped}건 / 확인 필요 ${failed}건`);
+      if (failed) pushNotification("송장 수신함 점검", `${failed}건은 반영하지 않았습니다.`, "운송장 관리", "danger");
+      alert(`송장 처리 완료\n반영 ${valid.length}건\n동일값 생략 ${skipped}건\n확인 필요 ${failed}건\n\n오류 행은 변경하지 않았습니다.`);
+    } catch (error) { alert(`송장 처리 실패: ${error.message}`); }
+    finally {
+      busyRef.current = false;
       setProcessing(false);
       if (fileRef.current) fileRef.current.value = "";
     }
@@ -1344,21 +1511,22 @@ function InvoicePage({ orders, setOrders, invoices, setInvoices, suppliers, invo
       <PageHead title="운송장 관리" description="여러 도매처 송장 파일을 한 번에 넣으면 도매처·컬럼·주문번호를 자동 판별해 정상 건만 매칭합니다." actions={<><button className="secondary" onClick={downloadTemplate}>송장 템플릿</button><label className="primary fileLabel">{processing ? "처리 중..." : "송장 파일 여러 개 불러오기"}<input ref={fileRef} type="file" multiple accept=".xlsx,.xls,.csv" disabled={processing} onChange={(e) => uploadInvoiceFiles(e.target.files)} /></label><button className="primary" disabled={!selected.length || processing} onClick={() => registerRows(invoices.filter((r) => selected.includes(r.id)))}>검증 후 일괄등록 ({selected.length})</button></>} />
 
       <div className="panel invoiceInbox">
-        <div className="panelHead"><div><h2>송장 수신함</h2><p>카톡·메일로 받은 도매처 송장 파일을 여러 개 선택하면 한 번에 처리합니다. 수기 입력은 예외 수정용입니다.</p></div>{lastInboxAt && <span className="muted">최근 처리 {new Date(lastInboxAt).toLocaleString("ko-KR")}</span>}</div>
-        {inboxResults.length === 0 ? <div className="inboxEmpty">여러 도매처의 XLSX/XLS/CSV를 한꺼번에 선택하세요.<br/><small>파일명이 도매처를 명시하면 검증하고, 일반 파일은 각 주문번호 기준으로 행별 도매처를 판별합니다. 여러 도매처가 한 파일에 섞여 있어도 처리됩니다.</small></div> : <div className="inboxGrid">{inboxResults.map((result) => <div className={`inboxCard ${result.failed ? "warning" : "ok"}`} key={result.fileName}><b>{result.fileName}</b><span>도매처 · {result.supplier}</span><div><strong>{result.matched}</strong> 자동매칭 <em>{result.failed} 확인필요</em></div>{result.errors.length > 0 && <ul>{result.errors.map((error) => <li key={error}>{error}</li>)}</ul>}</div>)}</div>}
-        <p className="securityNote">정상 매칭 건은 자동으로 ‘쿠팡 등록 가능’으로 전환되고 일괄등록 대상으로 선택됩니다. 실제 WING API 연결 전에는 외부로 전송되지 않습니다.</p>
+        <div className="panelHead"><div><h2>송장 수신함</h2><p>카톡·메일로 받은 송장 파일을 처리합니다. 발주서는 불러올 수 없습니다. 수신 결과 닫기는 표시만 지우며 입력된 송장과 처리 로그는 유지합니다.</p></div>{inboxResults.length > 0 && <button className="secondary" onClick={() => { setInboxResults([]); setLastInboxAt(""); }}>수신 결과 닫기</button>}{lastInboxAt && <span className="muted">최근 처리 {new Date(lastInboxAt).toLocaleString("ko-KR")}</span>}</div>
+        {inboxResults.length === 0 ? <div className="inboxEmpty">여러 도매처의 XLSX/XLS/CSV를 한꺼번에 선택하세요.<br/><small>파일명이 도매처를 명시하면 검증하고, 일반 파일은 각 주문번호 기준으로 행별 도매처를 판별합니다. 여러 도매처가 한 파일에 섞여 있어도 처리됩니다.</small></div> : <div className="inboxGrid">{inboxResults.map((result) => <div className={`inboxCard ${result.failed ? "warning" : "ok"}`} key={result.key}><b>{result.fileName}</b><span>도매처 · {result.supplier}</span><div><strong>{result.matched}</strong> 반영 <small>{result.skipped || 0} 동일값 생략</small> <em>{result.failed} 확인필요</em></div>{result.errors.length > 0 && <ul>{result.errors.map((error) => <li key={error}>{error}</li>)}</ul>}</div>)}</div>}
+        <p className="securityNote">정상 매칭 건은 자동으로 ‘쿠팡 등록 가능’으로 전환되고 일괄등록 대상으로 선택됩니다. 실운영 모드에서는 서버 자동화가 실제 쿠팡 등록을 수행하고 결과를 반영합니다.</p>
       </div>
 
       <div className="panel filterBar"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="주문번호·상품·택배사·송장번호 검색" /><select value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)}><option value="all">전체 도매처</option>{suppliers.filter((s) => s.active).map((s) => <option key={s.id}>{s.name}</option>)}</select></div>
       <div className="panel"><div className="table"><table><thead><tr><th><input type="checkbox" checked={selectable.length > 0 && selected.length === selectable.length} onChange={toggleAll} /></th><th>주문번호</th><th>상품</th><th>도매처</th><th>택배사</th><th>운송장번호</th><th>검증</th><th>상태</th><th>관리</th></tr></thead><tbody>
-        {rows.length === 0 ? <tr><td colSpan="9">조건에 맞는 운송장 주문이 없습니다.</td></tr> : rows.map((row) => { const issues = rowIssues(row); return <tr key={row.id}><td><input type="checkbox" disabled={!row.carrier || !row.invoice || row.status === "등록완료(테스트)" || issues.length > 0} checked={selected.includes(row.id)} onChange={() => toggle(row.id)} /></td><td><b>{row.id}</b><small className="subText">{row.source}</small></td><td>{row.product}</td><td>{row.supplier}</td><td>{row.carrier || "-"}</td><td>{row.invoice || "-"}</td><td>{issues.length ? <span className="severity danger">{issues.join(" · ")}</span> : <span className="okText">정상</span>}</td><td><Tag>{row.status}</Tag></td><td className="actions">{row.status === "등록완료(테스트)" ? <button className="secondary" onClick={() => cancelRegister(row)}>등록 취소</button> : <button className="secondary" disabled={!row.carrier || !row.invoice || issues.length > 0} onClick={() => registerRows([row])}>쿠팡 등록</button>}<button className="secondary" onClick={() => edit(row)} disabled={row.status === "등록완료(테스트)"}>수정</button></td></tr>; })}
+        {rows.length === 0 ? <tr><td colSpan="9">조건에 맞는 운송장 주문이 없습니다.</td></tr> : rows.map((row) => { const issues = rowIssues(row); return <tr key={row.id}><td><input type="checkbox" disabled={!row.carrier || !row.invoice || String(row.status).startsWith("등록완료") || issues.length > 0} checked={selected.includes(row.id)} onChange={() => toggle(row.id)} /></td><td><b>{row.id}</b><small className="subText">{row.source}</small></td><td>{row.product}</td><td>{row.supplier}</td><td>{row.carrier || "-"}</td><td>{row.invoice || "-"}</td><td>{issues.length ? <span className="severity danger">{issues.join(" · ")}</span> : <span className="okText">정상</span>}</td><td><Tag>{row.status}</Tag></td><td className="actions">{String(row.status).startsWith("등록완료") ? <button className="secondary" onClick={() => cancelRegister(row)}>등록 취소</button> : <button className="secondary" disabled={!row.carrier || !row.invoice || issues.length > 0} onClick={() => registerRows([row])}>쿠팡 등록</button>}<button className="secondary" onClick={() => edit(row)} disabled={String(row.status).startsWith("등록완료")}>수정</button></td></tr>; })}
       </tbody></table></div></div>
       <div className="panel"><div className="panelHead"><div><h2>운송장 처리 로그</h2><p>자동매칭·중복·실패·등록·취소 기록</p></div><button className="secondary" onClick={() => setInvoiceLogs([])}>로그 비우기</button></div><LogTable rows={invoiceLogs} /></div>
     </>
   );
 }
 
-function MarketingPage({ orders, setOrders, invoices, setInvoices, marketingLogs, setMarketingLogs, pushActivity, pushNotification }) {
+function MarketingPage({ returnCases, orders, setOrders, invoices, setInvoices, marketingLogs, setMarketingLogs, pushActivity, pushNotification }) {
+  const marketingBusyRef = useRef(false);
   const [candidates, setCandidates] = useState([]);
   const [selected, setSelected] = useState([]);
   const listRef = useRef(null);
@@ -1369,17 +1537,22 @@ function MarketingPage({ orders, setOrders, invoices, setInvoices, marketingLogs
 
   const parseList = async (file) => {
     if (!file) return;
-    const rows = sheetRowsFromArrayBuffer(await file.arrayBuffer());
-    const ids = rows.map((row) => String(findCell(row, ["주문번호", "orderid", "주문ID"], 0)).trim()).filter(Boolean);
-    const matched = orders.filter((o) => ids.includes(o.id));
-    setCandidates(matched);
-    setSelected(matched.map((o) => o.id));
-    addLog("명단 매칭", `${matched.length}건 매칭 / ${Math.max(0, ids.length - matched.length)}건 미매칭`);
-    if (listRef.current) listRef.current.value = "";
+    try {
+      if (file.size > 10 * 1024 * 1024) throw new Error("10MB 이하 파일을 선택하세요");
+      const rows = sheetRowsFromArrayBuffer(await file.arrayBuffer());
+      const keys = Object.keys(rows[0] || {}).filter(k => ["주문번호", "orderid", "주문id"].includes(normalizeHeader(k)));
+      if (keys.length !== 1) throw new Error("주문번호 열을 하나만 포함해야 합니다");
+      const ids = [...new Set(rows.map(r => String(r[keys[0]] || "").trim()).filter(Boolean))];
+      const matched = orders.filter(o => ids.includes(o.id) && !o.purchaseBatchId && o.purchaseStatus !== "발주완료");
+      setCandidates(matched); setSelected(matched.map(o => o.id));
+      addLog("명단 매칭", `${matched.length}건 매칭 / 나머지는 발주상태·주문번호 확인 필요`);
+    } catch (error) { alert(error.message); }
+    finally { if (listRef.current) listRef.current.value = ""; }
   };
 
   const confirmMarketing = () => {
     if (!selected.length) return alert("확정할 주문을 선택해주세요.");
+    if (orders.some(o => selected.includes(o.id) && (o.purchaseBatchId || o.purchaseStatus === "발주완료"))) return alert("발주한 주문은 마케팅으로 변경할 수 없습니다. 기존 발주를 먼저 확인하세요.");
     setOrders((prev) => prev.map((o) => selected.includes(o.id) ? { ...o, marketing: true, purchaseStatus: "마케팅 처리", invoiceStatus: "마케팅 송장 대기" } : o));
     setInvoices((prev) => prev.filter((r) => !selected.includes(r.id)));
     addLog("마케팅 확정", `${selected.length}건을 마케팅 주문으로 분류`);
@@ -1390,31 +1563,35 @@ function MarketingPage({ orders, setOrders, invoices, setInvoices, marketingLogs
 
   const releaseMarketing = (id) => {
     const order = orders.find((o) => o.id === id); if (!order) return;
+    if (invoices.some(r => r.id === id && (r.invoice || /등록완료/.test(r.status || "")))) return alert("송장 입력·등록을 먼저 확인하고 초기화하세요.");
     setOrders((prev) => prev.map((o) => o.id === id ? { ...o, marketing: false, purchaseStatus: o.supplier === "미연결" ? "도매처 연결 필요" : "발주대기", invoiceStatus: "송장대기" } : o));
     setInvoices((prev) => prev.filter((r) => r.id !== id));
     addLog("마케팅 해제", `${id} 일반 주문으로 복구`);
   };
 
   const uploadMarketingInvoices = async (file) => {
-    if (!file) return;
-    const imported = sheetRowsFromArrayBuffer(await file.arrayBuffer()).map((row) => ({
-      id: String(findCell(row, ["주문번호", "orderid"], 0)).trim(),
-      carrier: String(findCell(row, ["택배사", "carrier"], 1)).trim(),
-      invoice: String(findCell(row, ["운송장번호", "송장번호", "invoice"], 2)).trim(),
-    })).filter((r) => r.id);
-    const valid = imported.filter((r) => marketingOrders.some((o) => o.id === r.id));
-    setInvoices((prev) => {
-      const next = [...prev.filter((r) => !valid.some((v) => v.id === r.id))];
-      valid.forEach((v) => {
-        const o = orders.find((x) => x.id === v.id);
-        next.push({ id: v.id, product: o?.product || "", supplier: "마케팅", carrier: v.carrier, invoice: v.invoice, status: v.invoice ? "등록대기" : "송장대기", source: "마케팅", updatedAt: nowIso() });
+    if (!file || marketingBusyRef.current) return;
+    marketingBusyRef.current = true;
+    try {
+      const parsed = await parseInvoiceFile(file, XLSX);
+      const current = [...invoices];
+      for (const o of marketingOrders) if (!current.some(r => r.id === o.id)) current.push({ id: o.id, product: o.product, supplier: "마케팅", carrier: "", invoice: "", source: "마케팅", status: "송장대기" });
+      const { valid, results } = planInvoiceImport([parsed], marketingOrders, current, returnCases);
+      const updates = new Map(valid.map(r => [r.id, r]));
+      setInvoices(prev => {
+        const next = [...prev];
+        for (const [id, row] of updates) {
+          const idx = next.findIndex(r => r.id === id);
+          const update = { ...current.find(r => r.id === id), carrier: row.carrier, invoice: row.invoice, status: "등록대기", updatedAt: nowIso() };
+          if (idx < 0) next.push(update); else next[idx] = update;
+        }
+        return next;
       });
-      return next;
-    });
-    setOrders((prev) => prev.map((o) => valid.some((v) => v.id === o.id) ? { ...o, invoiceStatus: valid.find((v) => v.id === o.id)?.invoice ? "쿠팡 등록 가능" : "마케팅 송장 대기" } : o));
-    addLog("마케팅 송장 매칭", `${valid.length}건 매칭`);
-    pushNotification("마케팅 송장 준비", `${valid.length}건이 쿠팡 등록 가능한 상태로 전환됐습니다.`, "운송장 관리");
-    if (invoiceRef.current) invoiceRef.current.value = "";
+      setOrders(prev => prev.map(o => updates.has(o.id) ? { ...o, invoiceStatus: "쿠팡 등록 가능" } : o));
+      addLog("마케팅 송장 검증", `${valid.length}건 반영 · ${results[0].failed}건 제외`);
+      alert(`반영 ${valid.length}건 / 동일값 ${results[0].skipped}건 / 오류 ${results[0].failed}건\n${results[0].errors.join("\n")}`);
+    } catch (error) { alert(error.message); }
+    finally { marketingBusyRef.current = false; if (invoiceRef.current) invoiceRef.current.value = ""; }
   };
 
   return (
@@ -1430,7 +1607,7 @@ function MarketingPage({ orders, setOrders, invoices, setInvoices, marketingLogs
 function SupplierPage({ suppliers, setSuppliers, products }) {
   const emptyForm={name:"",contact:"",method:"카카오톡",shareTarget:"",orderShareMessage:"{도매처} 발주서입니다. 발주번호 {발주번호}, 총 {주문수}건입니다. 출고 후 송장 파일 회신 부탁드립니다.",orderDeadline:"17:00",invoiceDeadline:"19:00",orderColumns:"주문번호,주문일,수취인,상품명,옵션,수량,주소",invoiceColumns:"주문번호,택배사,운송장번호",defectAction:"환불",wrongAction:"재배송",damageAction:"재배송",returnShippingPayer:"도매처",responseDeadlineHours:24,active:true,minOrderQty:1,minOrderAmount:0,holidays:"",shipLeadDays:1,deliveryLeadDays:2,orderFileName:"{도매처}_{날짜}_발주서",orderSheetName:"발주서",invoiceMapOrderId:"주문번호",invoiceMapCarrier:"택배사",invoiceMapInvoice:"운송장번호",dispatchEnabled:true,dispatchRecipientId:"",dispatchChannel:"webhook"};
   const [form,setForm]=useState(emptyForm); const [editingId,setEditingId]=useState(null); const [showForm,setShowForm]=useState(false);
-  const save=()=>{if(!form.name.trim())return alert("도매처명 입력"); if(editingId)setSuppliers(p=>p.map(s=>s.id===editingId?{...s,...form,name:form.name.trim()}:s));else setSuppliers(p=>[...p,{...form,id:Date.now(),name:form.name.trim()}]);setForm(emptyForm);setEditingId(null);setShowForm(false)};
+  const save=()=>{if(!form.name.trim())return alert("도매처명 입력"); if(suppliers.some(x=>x.id!==editingId&&x.name===form.name.trim())||["__proto__","constructor","prototype"].includes(form.name.trim()))return alert("이미 사용 중이거나 사용할 수 없는 도매처명입니다."); if(editingId)setSuppliers(p=>p.map(s=>s.id===editingId?{...s,...form,name:form.name.trim()}:s));else setSuppliers(p=>[...p,{...form,id:Date.now(),name:form.name.trim()}]);setForm(emptyForm);setEditingId(null);setShowForm(false)};
   const edit=s=>{setForm({...emptyForm,...s});setEditingId(s.id);setShowForm(true);window.scrollTo({top:0,behavior:"smooth"})};
   return <><PageHead title="도매처 관리" description="발주 전달대상·메시지·마감·휴무·발주/송장 양식·CS 규정을 도매처별로 저장합니다." actions={<button className="primary" onClick={()=>{setForm(emptyForm);setEditingId(null);setShowForm(true)}}>+ 도매처 추가</button>}/>
   {showForm&&<div className="panel"><h2>{editingId?"도매처 수정":"도매처 추가"}</h2><div className="formGrid"><Field label="도매처명"><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></Field><Field label="연락처"><input value={form.contact} onChange={e=>setForm({...form,contact:e.target.value})}/></Field><Field label="발주 방식"><select value={form.method} onChange={e=>setForm({...form,method:e.target.value})}><option>카카오톡</option><option>문자</option><option>이메일</option><option>기타</option></select></Field><Field label="발주 전달 대상/채팅방"><input value={form.shareTarget||""} placeholder="예: A농장 오픈채팅" onChange={e=>setForm({...form,shareTarget:e.target.value})}/></Field><Field label="자동전송 대상 ID"><input value={form.dispatchRecipientId||""} placeholder="서버 어댑터가 사용하는 대상 ID" onChange={e=>setForm({...form,dispatchRecipientId:e.target.value})}/></Field><Field label="자동전송"><select value={form.dispatchEnabled===false?"끄기":"켜기"} onChange={e=>setForm({...form,dispatchEnabled:e.target.value==="켜기"})}><option>켜기</option><option>끄기</option></select></Field><Field label="발주 공유 메시지" wide><input value={form.orderShareMessage||""} onChange={e=>setForm({...form,orderShareMessage:e.target.value})} placeholder="{도매처} {발주번호} {주문수} 사용 가능"/></Field><Field label="발주 마감"><input type="time" value={form.orderDeadline} onChange={e=>setForm({...form,orderDeadline:e.target.value})}/></Field><Field label="송장 마감"><input type="time" value={form.invoiceDeadline} onChange={e=>setForm({...form,invoiceDeadline:e.target.value})}/></Field><Field label="회신 제한(시간)"><input type="number" value={form.responseDeadlineHours} onChange={e=>setForm({...form,responseDeadlineHours:Number(e.target.value)})}/></Field><Field label="최소 발주 수량"><input type="number" min="1" value={form.minOrderQty} onChange={e=>setForm({...form,minOrderQty:Number(e.target.value)})}/></Field><Field label="최소 발주 금액"><input type="number" min="0" value={form.minOrderAmount} onChange={e=>setForm({...form,minOrderAmount:Number(e.target.value)})}/></Field><Field label="휴무일(YYYY-MM-DD, 쉼표구분)"><input value={form.holidays||""} onChange={e=>setForm({...form,holidays:e.target.value})}/></Field><Field label="출고 리드타임(일)"><input type="number" min="0" value={form.shipLeadDays} onChange={e=>setForm({...form,shipLeadDays:Number(e.target.value)})}/></Field><Field label="배송 리드타임(일)"><input type="number" min="0" value={form.deliveryLeadDays} onChange={e=>setForm({...form,deliveryLeadDays:Number(e.target.value)})}/></Field><Field label="발주 파일명"><input value={form.orderFileName} onChange={e=>setForm({...form,orderFileName:e.target.value})}/></Field><Field label="발주 시트명"><input value={form.orderSheetName} onChange={e=>setForm({...form,orderSheetName:e.target.value})}/></Field><Field label="발주서 컬럼" wide><input value={form.orderColumns} onChange={e=>setForm({...form,orderColumns:e.target.value})}/></Field><Field label="송장 컬럼" wide><input value={form.invoiceColumns} onChange={e=>setForm({...form,invoiceColumns:e.target.value})}/></Field><Field label="송장 주문번호 컬럼"><input value={form.invoiceMapOrderId} onChange={e=>setForm({...form,invoiceMapOrderId:e.target.value})}/></Field><Field label="송장 택배사 컬럼"><input value={form.invoiceMapCarrier} onChange={e=>setForm({...form,invoiceMapCarrier:e.target.value})}/></Field><Field label="송장번호 컬럼"><input value={form.invoiceMapInvoice} onChange={e=>setForm({...form,invoiceMapInvoice:e.target.value})}/></Field><Field label="품질 기본"><select value={form.defectAction} onChange={e=>setForm({...form,defectAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="오배송 기본"><select value={form.wrongAction} onChange={e=>setForm({...form,wrongAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="파손 기본"><select value={form.damageAction} onChange={e=>setForm({...form,damageAction:e.target.value})}><option>환불</option><option>재배송</option><option>수동</option></select></Field><Field label="반품 배송비"><select value={form.returnShippingPayer} onChange={e=>setForm({...form,returnShippingPayer:e.target.value})}><option>도매처</option><option>판매자</option><option>고객</option></select></Field></div><div className="formActions"><button className="secondary" onClick={()=>setShowForm(false)}>취소</button><button className="primary" onClick={save}>저장</button></div></div>}
@@ -1445,11 +1622,11 @@ function ProductLinkPage({ products, setProducts, suppliers, productFilter }) {
   return <><PageHead title="상품 연결" description="주/대체 도매처·자동화 규칙·품절·원가 변경 이력·연결 추천을 관리합니다."/><div className="panel filterBar"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="상품·옵션·도매처 검색"/><span className="muted">미연결 {products.filter(p=>p.active!==false&&!p.supplier).length} · 품절 {products.filter(p=>p.stockout).length}</span></div><div className="panel"><div className="table"><table><thead><tr><th>상품</th><th>옵션</th><th>판매가</th><th>원가</th><th>배송비</th><th>수수료</th><th>주 도매처</th><th>대체 도매처</th><th>자동화 규칙</th><th>재고</th><th>상태</th><th>관리</th></tr></thead><tbody>{rows.map(p=><tr key={p.id}><td><b>{p.name}</b><small className="subText">{p.vendorProductName||"도매처 상품명 미입력"}</small></td><td>{p.option}</td><td>{money(p.price)}</td><td>{money(p.cost)}<button className="linkButton" onClick={()=>changeCost(p)}>변경</button></td><td><input className="smallInput" type="number" value={p.shippingCost??0} onChange={e=>update(p.id,{shippingCost:Number(e.target.value||0)})}/></td><td><input className="tinyInput" type="number" value={p.feeRate??10} onChange={e=>update(p.id,{feeRate:Number(e.target.value||0)})}/>%</td><td><select value={p.supplier||""} onChange={e=>update(p.id,{supplier:e.target.value})}><option value="">도매처 선택</option>{activeSuppliers.map(s=><option key={s.id}>{s.name}</option>)}</select></td><td><select value={p.alternateSupplier||""} onChange={e=>update(p.id,{alternateSupplier:e.target.value})}><option value="">없음</option>{activeSuppliers.filter(s=>s.name!==p.supplier).map(s=><option key={s.id}>{s.name}</option>)}</select></td><td><select value={p.automationMode||"자동"} onChange={e=>update(p.id,{automationMode:e.target.value})}><option>자동</option><option>수동검토</option></select></td><td><button className={p.stockout?"dangerButton":"secondary"} onClick={()=>toggleStock(p)}>{p.stockout?"품절":"판매가능"}</button></td><td><Tag>{p.active===false?"자동화 중지":p.stockout?"품절":p.supplier?"연결완료":"미연결"}</Tag></td><td className="actions"><button className="secondary" onClick={()=>recommend(p)}>연결 추천</button><button className="secondary" onClick={()=>setSelectedId(p.id)}>이력</button><button className="secondary" onClick={()=>update(p.id,{active:p.active===false})}>{p.active===false?"자동화 켜기":"자동화 끄기"}</button></td></tr>)}</tbody></table></div></div>{chosen&&<div className="panel"><div className="panelHead"><div><h2>{chosen.name} 변경 이력</h2></div><button className="secondary" onClick={()=>setSelectedId(null)}>닫기</button></div><div className="operationsGrid"><div><h3>원가 이력</h3>{(chosen.costHistory||[]).length?(chosen.costHistory||[]).map((h,i)=><p key={i} className="historyRow">{new Date(h.time).toLocaleString("ko-KR")} · {money(h.previous)} → <b>{money(h.cost)}</b></p>):<p className="muted">이력 없음</p>}</div><div><h3>품절 이력</h3>{(chosen.stockoutHistory||[]).length?(chosen.stockoutHistory||[]).map((h,i)=><p key={i} className="historyRow">{new Date(h.time).toLocaleString("ko-KR")} · {h.stockout?"품절":"판매 재개"}</p>):<p className="muted">이력 없음</p>}</div></div></div>}<p className="securityNote">연결 추천은 자동 확정하지 않습니다. 도매처 상품 규격/원가/재고를 직접 확인한 뒤 주 도매처로 지정하세요.</p></>;
 }
 
-function CSPage({ orders, suppliers, invoices, inquiries, setInquiries, returnCases, setReturnCases, csLogs, setCsLogs, pushActivity, pushNotification }) {
+function CSPage({ settings, orders, suppliers, invoices, inquiries, setInquiries, returnCases, setReturnCases, csLogs, setCsLogs, pushActivity, pushNotification }) {
   const [range, setRange] = useState(7);
   const [selectedCaseId, setSelectedCaseId] = useState(null);
   const selectedCase = returnCases.find((c) => c.id === selectedCaseId);
-  const within = (iso) => daysAgo(iso) < range;
+  const within = (iso) => range === 0 || daysAgo(iso) < range;
   const rangeInquiries = inquiries.filter((q) => within(q.createdAt));
   const rangeCases = returnCases.filter((c) => within(c.createdAt));
   const stats = { inquiry: rangeInquiries.length, return: rangeCases.filter((c) => c.caseType === "반품").length, cancel: rangeCases.filter((c) => c.caseType === "취소").length, pending: rangeCases.filter((c) => !c.processed).length };
@@ -1459,6 +1636,14 @@ function CSPage({ orders, suppliers, invoices, inquiries, setInquiries, returnCa
   const supplierFor = (caseItem) => suppliers.find((s) => s.name === (caseItem.supplier || orderFor(caseItem.orderId)?.supplier));
 
   const reply = (item) => {
+    if (settings.systemMode === "실운영") {
+      if (item.source !== "coupang" || !item.inquiryId) return alert("실제 쿠팡 문의가 아닙니다.");
+      const answer = window.prompt("실제 고객에게 전송할 답변을 입력하세요.", item.approvedAnswer || "");
+      if (!answer?.trim() || !window.confirm("이 답변을 서버 전송 대상으로 승인할까요?")) return;
+      setInquiries(prev => prev.map(q => q.id === item.id ? { ...q, approvedAnswer: answer.trim(), status: "답변전송대기" } : q));
+      return;
+    }
+    if (settings.systemMode !== "테스트") return alert("실운영 모드와 서버 연결이 필요합니다.");
     if (item.status === "답변완료") return alert("이미 답변한 문의입니다.");
     const answer = window.prompt("고객에게 보낼 답변을 입력하세요.", item.answer || "");
     if (answer === null || !answer.trim()) return;
@@ -1468,10 +1653,12 @@ function CSPage({ orders, suppliers, invoices, inquiries, setInquiries, returnCa
   };
 
   const handleCase = (item) => {
+    if (settings.systemMode !== "테스트") return alert("실제 반품은 서버가 수집한 상태로 확인합니다. 단순변심은 설정의 입고완료 자동 승인 규칙을 사용하고, 품질·오배송·파손은 도매처 확인 후 WING에서 조치하세요.");
     if (item.processed) return alert("이미 처리된 건입니다.");
     const order = orderFor(item.orderId);
+    if (!order) return alert("연결된 주문이 없습니다.");
     const invoice = invoices.find((r) => r.id === item.orderId);
-    const shipped = invoice?.status === "등록완료(테스트)" || Boolean(invoice?.invoice) || order?.invoiceStatus === "등록완료(테스트)";
+    const shipped = invoice?.status === "등록완료(테스트)" || Boolean(invoice?.invoice && invoiceValueIssues(invoice.carrier, invoice.invoice).length === 0) || item.shipped === true || order?.invoiceStatus === "등록완료(테스트)";
 
     if (item.reason === "단순변심") {
       const status = shipped ? "회수없이 환불완료(테스트)" : "출고중지·환불완료(테스트)";
@@ -1490,6 +1677,7 @@ function CSPage({ orders, suppliers, invoices, inquiries, setInquiries, returnCa
     const defaultResolution = item.reason === "품질문제" ? supplier.defectAction : item.reason === "오배송" ? supplier.wrongAction : item.reason === "파손" ? supplier.damageAction : "수동";
     const resolution = window.prompt("처리 결과를 입력하세요. (환불/재배송/수동)", defaultResolution);
     if (resolution === null || !resolution.trim()) return;
+    if (!["환불", "재배송", "수동"].includes(resolution.trim())) return alert("환불/재배송/수동 중에서 입력해주세요.");
 
     setReturnCases((prev) => prev.map((c) => c.id === item.id ? { ...c, shipped, supplier: supplier.name, evidence: evidence.trim(), reviewNote: reviewNote.trim(), resolution: resolution.trim(), status: `${supplier.name} 확인대기 · ${resolution.trim()}` } : c));
     log("수동검토 시작", item, `${supplier.name} · ${resolution.trim()} 요청`);
@@ -1497,6 +1685,8 @@ function CSPage({ orders, suppliers, invoices, inquiries, setInquiries, returnCa
   };
 
   const completeManual = (item) => {
+    if (settings.systemMode !== "테스트") return alert("실제 CS API 미연결 상태입니다.");
+    if (!["환불", "재배송"].includes(item.resolution) || !orderFor(item.orderId)) return alert("처리 결과를 환불 또는 재배송으로 정한 뒤 확정하세요.");
     if (item.processed) return;
     const replyText = window.prompt("도매처 회신 내용을 입력하세요.", item.supplierReply || "");
     if (replyText === null || !replyText.trim()) return;
@@ -1506,14 +1696,62 @@ function CSPage({ orders, suppliers, invoices, inquiries, setInquiries, returnCa
     log("처리 완료", item, `${item.resolution || "처리"}완료(테스트)`);
   };
 
+  const evidenceCasesRef = useRef(returnCases);
+  evidenceCasesRef.current = returnCases;
+  const evidenceBusyRef = useRef(false);
   const addImages = async (item, files) => {
-    const images = await Promise.all(Array.from(files || []).slice(0, 3).map((file) => new Promise((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.readAsDataURL(file); })));
-    setReturnCases((prev) => prev.map((c) => c.id === item.id ? { ...c, evidenceImages: [...(c.evidenceImages || []), ...images].slice(0, 5) } : c));
+    const picked = Array.from(files || []);
+    if (!picked.length || evidenceBusyRef.current) return;
+    evidenceBusyRef.current = true;
+    try {
+      const images = [];
+      if (picked.length > 3) throw new Error("한 번에 사진 3장까지 선택해 주세요.");
+      for (const file of picked) {
+        if (file.size > 20 * 1024 * 1024) throw new Error("20MB 이하 사진을 선택해 주세요.");
+        const image = new Image();
+        const url = URL.createObjectURL(file);
+        try {
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error("사진 읽기 시간 초과")), 20000);
+            image.onload = () => { clearTimeout(timer); resolve(); };
+            image.onerror = () => { clearTimeout(timer); reject(new Error("사진을 읽을 수 없습니다. JPG 또는 PNG로 다시 선택해 주세요.")); };
+            image.src = url;
+          });
+          const canvas = document.createElement("canvas");
+          const scale = Math.min(1, 1280 / Math.max(image.naturalWidth, image.naturalHeight));
+          canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+          const ctx = canvas.getContext("2d");
+          if (!ctx) throw new Error("사진 변환을 시작하지 못했습니다.");
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+          let data = "";
+          for (const quality of [0.8, 0.65, 0.5, 0.35]) {
+            data = canvas.toDataURL("image/jpeg", quality);
+            if (data.length <= 280000) break;
+          }
+          if (!data.startsWith("data:image/jpeg;") || data.length > 280000) throw new Error("더 작은 사진으로 다시 선택해 주세요.");
+          images.push(data);
+        } finally { image.onload = null; image.onerror = null; image.src = ""; URL.revokeObjectURL(url); }
+      }
+      const current = evidenceCasesRef.current;
+      const target = current.find(c => c.id === item.id);
+      if (!target) throw new Error("해당 CS 건을 찾지 못했습니다.");
+      const combined = [...(target.evidenceImages || []), ...images];
+      if (combined.length > 5) throw new Error("CS 한 건당 사진 5장까지 첨부할 수 있습니다.");
+      const next = current.map(c => c.id === item.id ? { ...c, evidenceImages: combined } : c);
+      try { localStorage.setItem(STORAGE_PREFIX + "cs_returns", JSON.stringify(next)); }
+      catch { throw new Error("저장 공간이 부족하거나 브라우저가 저장을 차단했습니다. 새 사진은 추가하지 않았습니다."); }
+      evidenceCasesRef.current = next;
+      setReturnCases(next);
+    } catch (error) { alert(error.message || "사진 첨부에 실패했습니다."); }
+    finally { evidenceBusyRef.current = false; }
   };
 
   return (
     <>
-      <PageHead title="CS 관리" description="문의·반품·취소를 기간별로 집계하고, 단순변심만 자동 처리합니다." actions={<div className="tabs">{[1, 7, 15, 30].map((n) => <button key={n} className={range === n ? "on" : ""} onClick={() => setRange(n)}>{n === 1 ? "오늘" : `${n}일`}</button>)}</div>} />
+      <PageHead title="CS 관리" description="문의·반품·취소를 기간별로 집계하고, 단순변심만 자동 처리합니다." actions={<div className="tabs">{[0, 1, 7, 15, 30].map((n) => <button key={n} className={range === n ? "on" : ""} onClick={() => setRange(n)}>{n === 0 ? "전체" : n === 1 ? "오늘" : `${n}일`}</button>)}</div>} />
       <div className="cards"><MiniStat title="문의" value={stats.inquiry} /><MiniStat title="반품" value={stats.return} /><MiniStat title="취소" value={stats.cancel} /><MiniStat title="처리대기" value={stats.pending} /></div>
       <div className="panel"><div className="panelHead"><div><h2>고객 문의</h2><p>마감 임박 순</p></div></div><div className="table"><table><thead><tr><th>문의</th><th>주문</th><th>상품</th><th>내용</th><th>마감</th><th>상태</th><th>작업</th></tr></thead><tbody>{[...rangeInquiries].sort((a, b) => (a.deadline === "오늘" ? -1 : 1) - (b.deadline === "오늘" ? -1 : 1)).map((q) => <tr key={q.id}><td><b>{q.id}</b></td><td>{q.orderId}</td><td>{q.product}</td><td>{q.content}<small className="subText">{q.answer && `답변: ${q.answer}`}</small></td><td>{q.deadline}{q.deadline === "오늘" && q.status !== "답변완료" && <span className="dangerText"> 마감 임박</span>}</td><td><Tag>{q.status}</Tag></td><td><button className="secondary" onClick={() => reply(q)} disabled={q.status === "답변완료"}>{q.status === "답변완료" ? "답변완료" : "답변"}</button></td></tr>)}</tbody></table></div></div>
       <div className="panel"><div className="panelHead"><div><h2>반품·취소</h2><p>단순변심 자동 / 품질·오배송·파손·사기의심 수동</p></div></div><div className="table"><table><thead><tr><th>접수</th><th>종류</th><th>주문</th><th>사유</th><th>도매처</th><th>출고</th><th>상태</th><th>작업</th></tr></thead><tbody>{rangeCases.map((item) => <tr key={item.id}><td><b>{item.id}</b></td><td>{item.caseType}</td><td>{item.orderId}</td><td>{item.reason}</td><td>{item.supplier || orderFor(item.orderId)?.supplier || "-"}</td><td>{item.shipped ? "출고됨" : "출고 전"}</td><td><Tag>{item.status}</Tag></td><td className="actions"><button className="secondary" disabled={item.processed} onClick={() => item.reason === "단순변심" ? handleCase(item) : item.resolution ? completeManual(item) : handleCase(item)}>{item.processed ? "처리완료" : item.reason === "단순변심" ? "자동처리" : item.resolution ? `${item.resolution} 완료처리` : "수동검토"}</button><button className="secondary" onClick={() => setSelectedCaseId(item.id)}>상세보기</button></td></tr>)}</tbody></table></div></div>
@@ -1526,16 +1764,18 @@ function CSPage({ orders, suppliers, invoices, inquiries, setInquiries, returnCa
 function SettingsPage({ settings,setSettings,orders,products,suppliers,invoices,purchaseBatches,purchaseDispatches,setPurchaseDispatches,inquiries,returnCases,csLogs,invoiceLogs,activityLogs,notifications,marketingLogs,setOrders,setProducts,setSuppliers,setInvoices,setPurchaseBatches,setInquiries,setReturnCases,setCsLogs,setInvoiceLogs,setActivityLogs,setNotifications,setMarketingLogs,pushNotification,autoBackups,setAutoBackups,undoStack,undoLast }) {
   const restoreRef=useRef(null); const requestNotifications=async()=>{if(!("Notification" in window))return alert("알림 미지원");const permission=await Notification.requestPermission();setSettings(p=>({...p,browserNotifications:permission==="granted"}));};
   const testDispatchServer=async()=>{try{const r=await fetch("/api/dispatch-health",{credentials:"same-origin"});const d=await r.json();const lines=[d.configured?"✓ 전송 Webhook 설정됨":"✕ 전송 Webhook 미설정",d.authConfigured?"✓ 관리자 잠금 설정됨":"✕ 관리자 잠금 미설정",d.webhookTokenConfigured?"✓ Webhook 토큰 설정됨":"✕ Webhook 토큰 미설정",d.secure?"\n보안 준비 완료":"\nVercel 환경변수 추가 설정 필요"];alert(lines.join("\n"))}catch{alert("자동전송 서버에 연결할 수 없습니다.")}};
+  const testCoupangAPI=async()=>{try{const d=await getCoupangHealth();setSettings(p=>({...p,wingStatus:d.configured?"쿠팡 API 키 설정됨":"쿠팡 API 환경변수 미설정"}));alert(d.configured?"쿠팡 API 서버 설정 확인 완료\n\n키는 서버에만 저장됩니다.\n다음 단계는 주문내역에서 실제 주문 동기화를 실행하는 것입니다.":"쿠팡 API 환경변수가 아직 없습니다.\n\nVercel 환경변수에 COUPANG_VENDOR_ID / COUPANG_ACCESS_KEY / COUPANG_SECRET_KEY를 설정하세요.")}catch{alert("쿠팡 API 상태 확인에 실패했습니다. 관리자 잠금과 배포 상태를 확인하세요.")}};
   const unlockDispatchNow=async()=>{const ok=await unlockDispatch();if(ok)alert("자동전송 잠금 해제 완료 · 12시간 유지됩니다.")};
   const lockDispatchNow=async()=>{try{await fetch("/api/auth-logout",{method:"POST",credentials:"same-origin"});alert("자동전송 잠금을 다시 걸었습니다.")}catch{alert("잠금 처리 실패")}};
   const payload=()=>({version:DATA_VERSION,exportedAt:nowIso(),orders,products,suppliers,invoices,purchaseBatches,purchaseDispatches,inquiries,returnCases,csLogs,invoiceLogs,activityLogs,notifications,marketingLogs,settings});
   const backup=()=>saveBlob(new Blob([JSON.stringify(payload(),null,2)],{type:"application/json"}),`SellerFlow_backup_${new Date().toISOString().slice(0,10)}.json`);
-  const restore=async file=>{if(!file)return;try{const d=JSON.parse(await file.text());if(!d.orders||!d.products||!d.suppliers)throw new Error();setOrders(d.orders);setProducts(d.products);setSuppliers(d.suppliers);setInvoices(d.invoices||[]);setPurchaseBatches(d.purchaseBatches||[]);setPurchaseDispatches(d.purchaseDispatches||[]);setInquiries(d.inquiries||[]);setReturnCases(d.returnCases||[]);setCsLogs(d.csLogs||[]);setInvoiceLogs(d.invoiceLogs||[]);setActivityLogs(d.activityLogs||[]);setNotifications(d.notifications||[]);setMarketingLogs(d.marketingLogs||[]);setSettings({...defaultSettings,...(d.settings||{}),dataVersion:DATA_VERSION});alert("백업 복원 완료")}catch{alert("SellerFlow 백업 파일이 아닙니다.")} if(restoreRef.current)restoreRef.current.value=""};
+  const restore=async file=>{if(!file)return;try{const d=JSON.parse(await file.text());validateBackup(d);if(!confirm("백업으로 현재 데이터를 교체할까요? 먼저 현재 JSON 백업을 보관하세요."))return;setOrders(d.orders);setProducts(d.products);setSuppliers(d.suppliers);setInvoices(d.invoices||[]);setPurchaseBatches(d.purchaseBatches||[]);setPurchaseDispatches(d.purchaseDispatches||[]);setInquiries(d.inquiries||[]);setReturnCases(d.returnCases||[]);setCsLogs(d.csLogs||[]);setInvoiceLogs(d.invoiceLogs||[]);setActivityLogs(d.activityLogs||[]);setNotifications(d.notifications||[]);setMarketingLogs(d.marketingLogs||[]);setSettings({...defaultSettings,...(d.settings||{}),dataVersion:DATA_VERSION});alert("백업 복원 완료")}catch{alert("SellerFlow 백업 파일이 아닙니다.")} if(restoreRef.current)restoreRef.current.value=""};
   const integrityCheck=()=>{const issues=[];orders.forEach(o=>{if(!products.some(p=>p.name===o.product))issues.push(`${o.id}: 상품 데이터 없음`);if(o.purchaseStatus==="발주완료"&&!o.marketing&&!invoices.some(r=>r.id===o.id))issues.push(`${o.id}: 운송장 행 없음`);if(o.supplier!=="미연결"&&!suppliers.some(s=>s.name===o.supplier))issues.push(`${o.id}: 없는 도매처 ${o.supplier}`)});const dup={};invoices.forEach(r=>{if(r.invoice)dup[r.invoice]=(dup[r.invoice]||0)+1});Object.entries(dup).filter(([,n])=>n>1).forEach(([x])=>issues.push(`중복 송장 ${x}`));alert(issues.length?`점검 ${issues.length}건\n\n${issues.slice(0,15).join("\n")}`:"데이터 무결성 이상 없음")};
-  const restoreAuto=s=>{if(!confirm("이 자동 백업 시점으로 복구할까요?"))return;const d=s.data;setOrders(d.orders||[]);setProducts(d.products||[]);setSuppliers(d.suppliers||[]);setInvoices(d.invoices||[]);setPurchaseBatches(d.purchaseBatches||[]);setPurchaseDispatches(d.purchaseDispatches||[]);setInquiries(d.inquiries||[]);setReturnCases(d.returnCases||[]);setCsLogs(d.csLogs||[]);setInvoiceLogs(d.invoiceLogs||[]);setActivityLogs(d.activityLogs||[]);setNotifications(d.notifications||[]);setMarketingLogs(d.marketingLogs||[]);setSettings({...defaultSettings,...(d.settings||{}),dataVersion:DATA_VERSION});alert("자동 백업 복구 완료")};
-  return <><PageHead title="설정" description="테마·역할·운영모드·API 상태·안전장치·개인정보·백업·알림을 관리합니다."/>
-  <div className="panel"><h2>운영 모드 / 권한</h2><div className="formGrid"><Field label="현재 역할"><select value={settings.currentRole} onChange={e=>setSettings({...settings,currentRole:e.target.value})}><option>관리자</option><option>발주 담당</option><option>CS 담당</option><option>조회 전용</option></select></Field><Field label="시스템 모드"><select value={settings.systemMode} onChange={e=>setSettings({...settings,systemMode:e.target.value})}><option>테스트</option><option>실운영 준비</option></select></Field><Field label="화면 테마"><select value={settings.theme || "system"} onChange={e=>setSettings({...settings,theme:e.target.value})}><option value="system">시스템 설정</option><option value="light">라이트</option><option value="dark">다크</option></select></Field><Field label="API 상태"><input readOnly value={settings.apiOutage?"장애모드":settings.wingStatus||"미연결"}/></Field><Field label="마지막 동기화"><input readOnly value={settings.apiLastSyncAt?new Date(settings.apiLastSyncAt).toLocaleString("ko-KR"):"아직 없음"}/></Field><Field label="API 성공률"><input readOnly value={`${Number(settings.apiSuccessRate||0)}%`}/></Field><Field label="자동 재시도 횟수"><input type="number" min="0" max="5" value={settings.retryLimit} onChange={e=>setSettings({...settings,retryLimit:Number(e.target.value)})}/></Field><Field label="고가 주문 확인 기준"><input type="number" value={settings.highValueThreshold} onChange={e=>setSettings({...settings,highValueThreshold:Number(e.target.value)})}/></Field><Field label="다량 주문 확인 기준"><input type="number" value={settings.bulkQtyThreshold} onChange={e=>setSettings({...settings,bulkQtyThreshold:Number(e.target.value)})}/></Field><Field label="발주 자동전송"><select value={settings.autoPurchaseDispatch?"켜기":"끄기"} onChange={e=>setSettings({...settings,autoPurchaseDispatch:e.target.value==="켜기"})}><option>켜기</option><option>끄기</option></select></Field><Field label="자동전송 재시도"><input type="number" min="1" max="5" value={settings.purchaseDispatchRetryLimit||3} onChange={e=>setSettings({...settings,purchaseDispatchRetryLimit:Number(e.target.value)})}/></Field><Field label="전송 API 경로"><input value={settings.purchaseDispatchEndpoint||"/api/purchase-dispatch"} onChange={e=>setSettings({...settings,purchaseDispatchEndpoint:e.target.value})}/></Field></div><div className="formActions left"><button className={settings.apiOutage?"dangerButton":"secondary"} onClick={()=>setSettings({...settings,apiOutage:!settings.apiOutage})}>{settings.apiOutage?"API 장애모드 해제":"API 장애모드 켜기"}</button><button className="secondary" onClick={()=>setSettings({...settings,apiLastSyncAt:nowIso(),apiSuccessRate:100,wingStatus:"연결 테스트 통과(데모)"})}>API 상태 테스트(데모)</button><button className="secondary" onClick={testDispatchServer}>발주 자동전송 서버 테스트</button><button className="secondary" onClick={unlockDispatchNow}>자동전송 잠금 해제</button><button className="secondary" onClick={lockDispatchNow}>자동전송 잠금</button></div><p className="securityNote">자동전송은 서버의 관리자 비밀번호 세션으로 보호됩니다. 비밀번호와 API Secret은 브라우저 저장소에 저장하지 않습니다. 현재 MVP는 실제 Coupang WING 주문/송장 전송은 아직 연결 전입니다.</p></div>
-  <div className="panel"><h2>개인정보 / 보관 정책</h2><div className="formGrid"><Field label="목록 개인정보 마스킹"><select value={settings.privacyMasking?"사용":"해제"} onChange={e=>setSettings({...settings,privacyMasking:e.target.value==="사용"})}><option>사용</option><option>해제</option></select></Field><Field label="보관기간(일)"><input type="number" min="30" value={settings.dataRetentionDays} onChange={e=>setSettings({...settings,dataRetentionDays:Number(e.target.value)})}/></Field><Field label="자동 정리"><select value={settings.autoRetentionCleanup?"사용":"해제"} onChange={e=>setSettings({...settings,autoRetentionCleanup:e.target.value==="사용"})}><option>해제</option><option>사용</option></select></Field><Field label="자동 백업 간격(분)"><input type="number" min="1" value={settings.autoBackupMinutes} onChange={e=>setSettings({...settings,autoBackupMinutes:Number(e.target.value)})}/></Field></div></div>
+  const restoreAuto=s=>{if(!confirm("이 자동 백업 시점으로 복구할까요?"))return;const d=validateBackup(s.data);d.returnCases=(d.returnCases||[]).map(c=>({...c,evidenceImages:returnCases.find(x=>x.id===c.id)?.evidenceImages||c.evidenceImages||[]}));setOrders(d.orders||[]);setProducts(d.products||[]);setSuppliers(d.suppliers||[]);setInvoices(d.invoices||[]);setPurchaseBatches(d.purchaseBatches||[]);setPurchaseDispatches(d.purchaseDispatches||[]);setInquiries(d.inquiries||[]);setReturnCases(d.returnCases||[]);setCsLogs(d.csLogs||[]);setInvoiceLogs(d.invoiceLogs||[]);setActivityLogs(d.activityLogs||[]);setNotifications(d.notifications||[]);setMarketingLogs(d.marketingLogs||[]);setSettings({...defaultSettings,...(d.settings||{}),dataVersion:DATA_VERSION});alert("자동 백업 복구 완료")};
+  return <><PageHead title="설정" description="테마·역할·운영모드·API 상태·안전장치·개인정보·백업·알림을 관리합니다."/><AutomationPanel settings={settings} setSettings={setSettings}/>
+  <div className="panel"><h2>운영 모드 / 권한</h2><div className="formGrid"><Field label="현재 역할"><select value={settings.currentRole} onChange={e=>setSettings({...settings,currentRole:e.target.value})}><option>관리자</option><option>발주 담당</option><option>CS 담당</option><option>조회 전용</option></select></Field><Field label="시스템 모드"><select value={settings.systemMode} onChange={e=>setSettings({...settings,systemMode:e.target.value})}><option>테스트</option><option>실운영 준비</option><option>실운영</option></select></Field><Field label="화면 테마"><select value={settings.theme || "system"} onChange={e=>setSettings({...settings,theme:e.target.value})}><option value="system">시스템 설정</option><option value="light">라이트</option><option value="dark">다크</option></select></Field><Field label="API 상태"><input readOnly value={settings.apiOutage?"장애모드":settings.wingStatus||"미연결"}/></Field><Field label="마지막 동기화"><input readOnly value={settings.apiLastSyncAt?new Date(settings.apiLastSyncAt).toLocaleString("ko-KR"):"아직 없음"}/></Field><Field label="API 성공률"><input readOnly value={`${Number(settings.apiSuccessRate||0)}%`}/></Field><Field label="자동 재시도 횟수"><input type="number" min="0" max="5" value={settings.retryLimit} onChange={e=>setSettings({...settings,retryLimit:Number(e.target.value)})}/></Field><Field label="고가 주문 확인 기준"><input type="number" value={settings.highValueThreshold} onChange={e=>setSettings({...settings,highValueThreshold:Number(e.target.value)})}/></Field><Field label="다량 주문 확인 기준"><input type="number" value={settings.bulkQtyThreshold} onChange={e=>setSettings({...settings,bulkQtyThreshold:Number(e.target.value)})}/></Field><Field label="발주 자동전송"><select value={settings.autoPurchaseDispatch?"켜기":"끄기"} onChange={e=>setSettings({...settings,autoPurchaseDispatch:e.target.value==="켜기"})}><option>켜기</option><option>끄기</option></select></Field><Field label="자동전송 재시도"><input type="number" min="1" max="5" value={settings.purchaseDispatchRetryLimit||3} onChange={e=>setSettings({...settings,purchaseDispatchRetryLimit:Number(e.target.value)})}/></Field><Field label="전송 API 경로"><input value={settings.purchaseDispatchEndpoint||"/api/purchase-dispatch"} onChange={e=>setSettings({...settings,purchaseDispatchEndpoint:e.target.value})}/></Field></div><div className="formActions left"><button className={settings.apiOutage?"dangerButton":"secondary"} onClick={()=>setSettings({...settings,apiOutage:!settings.apiOutage})}>{settings.apiOutage?"API 장애모드 해제":"API 장애모드 켜기"}</button><button className="secondary" onClick={()=>setSettings({...settings,apiLastSyncAt:nowIso(),apiSuccessRate:100,wingStatus:"연결 테스트 통과(데모)"})}>API 상태 테스트(데모)</button><button className="secondary" onClick={testDispatchServer}>발주 자동전송 서버 테스트</button><button className="secondary" onClick={unlockDispatchNow}>자동전송 잠금 해제</button><button className="secondary" onClick={lockDispatchNow}>자동전송 잠금</button></div><p className="securityNote">자동전송은 서버의 관리자 비밀번호 세션으로 보호됩니다. 비밀번호와 API Secret은 브라우저 저장소에 저장하지 않습니다. 쿠팡 주문 조회 API는 연결 준비가 되어 있으며, 실제 송장·승인 답변·입고완료 단순변심 환불은 서버 자동화에서 처리합니다. 실제 계정 연동 검증 후 사용하세요.</p></div>
+<div className="panel"><h2>쿠팡 Open API</h2><div className="formGrid"><Field label="Vendor ID(표시용)"><input value={settings.vendorId||""} onChange={e=>setSettings({...settings,vendorId:e.target.value})} placeholder="A00..."/></Field><Field label="키 저장 위치"><input readOnly value="서버 환경변수(Vercel)"/></Field><Field label="연결 모드"><input readOnly value="주문 조회(읽기 전용)"/></Field></div><div className="formActions left"><button className="secondary" onClick={testCoupangAPI}>쿠팡 API 설정 확인</button><button className="secondary" onClick={()=>setSettings({...settings,systemMode:"테스트"})}>테스트 모드 유지</button></div><p className="securityNote">Access Key와 Secret Key는 이 화면이나 브라우저 저장소에 넣지 않습니다. 현재는 API 키가 없으면 테스트 모드로 동작합니다. 실제 주문 조회부터 검증한 뒤 송장 등록·CS 답변·반품 승인 같은 쓰기 작업은 별도 승인과 테스트를 거쳐 연결해야 합니다.</p></div>
+    <div className="panel"><h2>개인정보 / 보관 정책</h2><div className="formGrid"><Field label="목록 개인정보 마스킹"><select value={settings.privacyMasking?"사용":"해제"} onChange={e=>setSettings({...settings,privacyMasking:e.target.value==="사용"})}><option>사용</option><option>해제</option></select></Field><Field label="보관기간(일)"><input type="number" min="30" value={settings.dataRetentionDays} onChange={e=>setSettings({...settings,dataRetentionDays:Number(e.target.value)})}/></Field><Field label="자동 정리"><select value={settings.autoRetentionCleanup?"사용":"해제"} onChange={e=>setSettings({...settings,autoRetentionCleanup:e.target.value==="사용"})}><option>해제</option><option>사용</option></select></Field><Field label="자동 백업 간격(분)"><input type="number" min="1" value={settings.autoBackupMinutes} onChange={e=>setSettings({...settings,autoBackupMinutes:Number(e.target.value)})}/></Field></div></div>
   <div className="panel"><h2>보내는 사람</h2><div className="formGrid"><Field label="이름"><input value={settings.senderName} onChange={e=>setSettings({...settings,senderName:e.target.value})}/></Field><Field label="전화번호"><input value={settings.senderPhone} onChange={e=>setSettings({...settings,senderPhone:e.target.value})}/></Field><Field label="주소"><input value={settings.senderAddress} onChange={e=>setSettings({...settings,senderAddress:e.target.value})}/></Field></div></div>
   <div className="panel"><h2>알림</h2><div className="toggleGrid">{[["notifyOrderImport","주문 가져오기"],["notifyInvoiceDeadline","송장 마감"],["notifyCsRisk","CS 위험"],["notifyPurchaseDelay","발주 지연"],["notifyInvoiceMatchFail","송장 실패"],["notifyRegisterDone","등록 완료"]].map(([k,l])=><label key={k}><input type="checkbox" checked={Boolean(settings[k])} onChange={e=>setSettings({...settings,[k]:e.target.checked})}/> {l}</label>)}</div><div className="formActions left"><button className="secondary" onClick={requestNotifications}>브라우저 알림 권한</button><button className="secondary" onClick={()=>pushNotification("테스트 알림","SellerFlow 알림 정상","대시보드")}>알림 테스트</button></div></div>
   <div className="panel"><h2>대시보드 카드</h2><div className="toggleGrid">{defaultSettings.dashboardCards.map(card=><label key={card}><input type="checkbox" checked={(settings.dashboardCards||defaultSettings.dashboardCards).includes(card)} onChange={e=>{const cur=settings.dashboardCards||defaultSettings.dashboardCards;setSettings({...settings,dashboardCards:e.target.checked?[...new Set([...cur,card])]:cur.filter(x=>x!==card)})}}/> {card}</label>)}</div></div>
@@ -1653,3 +1893,4 @@ function SalesChart({ data }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+

@@ -33,6 +33,7 @@
   let saveTimer = null;
   let authPromptOpen = false;
   let lastSavedJson = "";
+  let saving = false;
 
   function readJson(localKey, fallback) {
     const raw = localStorage.getItem(PREFIX + localKey);
@@ -130,7 +131,7 @@
       if (unlocked) return apiRequest(method, body, true);
     }
 
-    if (!response.ok || data?.ok === false) {
+    if (!response.ok || data?.ok !== true) {
       const error = new Error(
         data?.message || `서버 백업 오류 (${response.status})`
       );
@@ -142,13 +143,15 @@
   }
 
   async function saveNow() {
-    if (!syncEnabled || restoreCheckPending) return false;
+    if (!syncEnabled || restoreCheckPending || saving) return false;
 
     const data = snapshot();
-    const serialized = JSON.stringify(data);
+    const serialized = JSON.stringify({ ...data, exportedAt: "" });
 
     if (serialized === lastSavedJson) return true;
 
+    saving = true;
+    try {
     const result = await apiRequest("PUT", {
       data,
       version: Number(data.version || 7),
@@ -163,6 +166,7 @@
     );
 
     return true;
+    } finally { saving = false; }
   }
 
   function scheduleSave() {
@@ -180,6 +184,13 @@
   }
 
   function restoreState(data, updatedAt = "") {
+    if (!data || !["orders", "products", "suppliers"].every(key => Array.isArray(data[key]))) throw new Error("서버 백업 형식 오류");
+    for (const key of Object.keys(STATE_KEYS)) if (key in data && (key === "settings" ? !data[key] || Array.isArray(data[key]) || typeof data[key] !== "object" : !Array.isArray(data[key]))) throw new Error("서버 백업 형식 오류: " + key);
+    // Compact server backups omit image binaries. Preserve evidence already on this browser.
+    const localCases = readJson(STATE_KEYS.returnCases, []);
+    data = { ...data, returnCases: (data.returnCases || []).map(c => ({ ...c, evidenceImages: c.evidenceImages?.length ? c.evidenceImages : localCases.find(x => x.id === c.id)?.evidenceImages || [] })) };
+    const old = Object.fromEntries(Object.values(STATE_KEYS).map(k => [k, localStorage.getItem(PREFIX + k)]));
+    try {
     for (const [stateKey, localKey] of Object.entries(STATE_KEYS)) {
       if (!(stateKey in data)) continue;
 
@@ -190,6 +201,12 @@
       );
     }
 
+    } catch (error) {
+      for (const [key, value] of Object.entries(old)) {
+        if (value === null) originalRemoveItem.call(localStorage, PREFIX + key); else originalSetItem.call(localStorage, PREFIX + key, value);
+      }
+      throw error;
+    }
     if (updatedAt) {
       originalSetItem.call(
         localStorage,
@@ -288,3 +305,4 @@ setInterval(() => {
 }, 10000);
   boot();
 })();
+
